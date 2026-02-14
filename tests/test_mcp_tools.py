@@ -82,7 +82,7 @@ class TestMCPToolsHandler:
         
         assert result.type == "text"
         assert "nginx-demo" in result.text
-        assert "running" in result.text
+        assert "RUNNING" in result.text
 
     @pytest.mark.asyncio
     async def test_start_custom_app(self, tools_handler):

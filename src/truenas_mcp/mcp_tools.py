@@ -338,7 +338,8 @@ class MCPToolsHandler:
         
         result = "Custom Apps:\n"
         for app in apps:
-            result += f"- {app['name']}: {app['status']}\n"
+            state = app.get("state", "unknown")
+            result += f"- {app['name']}: {state}\n"
         
         return TextContent(type="text", text=result)
     

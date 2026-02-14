@@ -63,14 +63,14 @@ class TestMockTrueNASClient:
         """Test listing only running apps."""
         apps = await mock_client.list_custom_apps("running")
 
-        running_apps = [app for app in apps if app["status"] == "running"]
+        running_apps = [app for app in apps if app["state"] == "RUNNING"]
         assert len(running_apps) == len(apps)  # All returned should be running
 
     @pytest.mark.asyncio
     async def test_get_app_status_existing(self, mock_client):
         """Test getting status of existing app."""
         status = await mock_client.get_app_status("nginx-demo")
-        assert status == "running"
+        assert status == "RUNNING"
 
     @pytest.mark.asyncio
     async def test_get_app_status_nonexistent(self, mock_client):
@@ -86,7 +86,7 @@ class TestMockTrueNASClient:
 
         # Verify status changed
         status = await mock_client.get_app_status("plex-server")
-        assert status == "running"
+        assert status == "RUNNING"
 
     @pytest.mark.asyncio
     async def test_start_app_nonexistent(self, mock_client):
@@ -102,7 +102,7 @@ class TestMockTrueNASClient:
 
         # Verify status changed
         status = await mock_client.get_app_status("nginx-demo")
-        assert status == "stopped"
+        assert status == "STOPPED"
 
     @pytest.mark.asyncio
     async def test_deploy_app_success(self, mock_client):
@@ -387,8 +387,8 @@ class TestTrueNASClient:
         """Test successful app listing."""
         mock_tn_client = MagicMock()
         mock_tn_client.call.return_value = [
-            {"name": "app1", "status": "running"},
-            {"name": "app2", "status": "stopped"},
+            {"name": "app1", "state": "RUNNING"},
+            {"name": "app2", "state": "STOPPED"},
         ]
         truenas_client._client = mock_tn_client
 
@@ -403,8 +403,8 @@ class TestTrueNASClient:
         """Test filtered app listing."""
         mock_tn_client = MagicMock()
         mock_tn_client.call.return_value = [
-            {"name": "app1", "status": "running"},
-            {"name": "app2", "status": "stopped"},
+            {"name": "app1", "state": "RUNNING"},
+            {"name": "app2", "state": "STOPPED"},
         ]
         truenas_client._client = mock_tn_client
 
@@ -428,11 +428,11 @@ class TestTrueNASClient:
     async def test_get_app_status(self, truenas_client):
         """Test getting app status."""
         mock_tn_client = MagicMock()
-        mock_tn_client.call.return_value = {"name": "app1", "status": "running"}
+        mock_tn_client.call.return_value = {"name": "app1", "state": "RUNNING"}
         truenas_client._client = mock_tn_client
 
         status = await truenas_client.get_app_status("app1")
-        assert status == "running"
+        assert status == "RUNNING"
 
     @pytest.mark.asyncio
     async def test_start_app_success(self, truenas_client):

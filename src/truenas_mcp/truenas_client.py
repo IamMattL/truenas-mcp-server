@@ -177,14 +177,14 @@ class TrueNASClient:
         apps = await self._call("app.query")
 
         if status_filter != "all":
-            apps = [app for app in apps if app.get("status") == status_filter]
+            apps = [app for app in apps if app.get("state", "").lower() == status_filter.lower()]
 
         return apps
 
     async def get_app_status(self, app_name: str) -> str:
         """Get Custom App status."""
         app_data = await self._call("app.get_instance", app_name)
-        return app_data.get("status", "unknown")
+        return app_data.get("state", "unknown")
 
     async def start_app(self, app_name: str) -> bool:
         """Start Custom App."""

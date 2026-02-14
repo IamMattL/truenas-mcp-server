@@ -21,21 +21,21 @@ class MockTrueNASClient:
         self.mock_apps = {
             "nginx-demo": {
                 "name": "nginx-demo",
-                "status": "running",
+                "state": "RUNNING",
                 "containers": ["nginx-demo-web-1"],
                 "ports": ["8080:80"],
                 "created": "2025-07-30T10:00:00Z",
             },
             "plex-server": {
                 "name": "plex-server",
-                "status": "stopped",
+                "state": "STOPPED",
                 "containers": ["plex-server-plex-1"],
                 "ports": ["32400:32400"],
                 "created": "2025-07-29T15:30:00Z",
             },
             "home-assistant": {
                 "name": "home-assistant",
-                "status": "running",
+                "state": "RUNNING",
                 "containers": ["home-assistant-hass-1"],
                 "ports": ["8123:8123"],
                 "created": "2025-07-28T09:15:00Z",
@@ -70,7 +70,7 @@ class MockTrueNASClient:
         apps = list(self.mock_apps.values())
         
         if status_filter != "all":
-            apps = [app for app in apps if app["status"] == status_filter]
+            apps = [app for app in apps if app["state"].lower() == status_filter.lower()]
         
         return apps
 
@@ -82,7 +82,7 @@ class MockTrueNASClient:
         if app_name not in self.mock_apps:
             raise Exception(f"App '{app_name}' not found")
         
-        return self.mock_apps[app_name]["status"]
+        return self.mock_apps[app_name]["state"]
 
     async def start_app(self, app_name: str) -> bool:
         """Mock start Custom App."""
@@ -92,7 +92,7 @@ class MockTrueNASClient:
         if app_name not in self.mock_apps:
             return False
         
-        self.mock_apps[app_name]["status"] = "running"
+        self.mock_apps[app_name]["state"] = "RUNNING"
         return True
 
     async def stop_app(self, app_name: str) -> bool:
@@ -103,7 +103,7 @@ class MockTrueNASClient:
         if app_name not in self.mock_apps:
             return False
         
-        self.mock_apps[app_name]["status"] = "stopped"
+        self.mock_apps[app_name]["state"] = "STOPPED"
         return True
 
     async def deploy_app(
@@ -119,7 +119,7 @@ class MockTrueNASClient:
         # Add new app to mock data
         self.mock_apps[app_name] = {
             "name": app_name,
-            "status": "running" if auto_start else "stopped",
+            "state": "RUNNING" if auto_start else "STOPPED",
             "containers": [f"{app_name}-service-1"],
             "ports": ["8080:80"],  # Mock port
             "created": "2025-07-30T12:00:00Z",

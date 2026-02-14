@@ -180,12 +180,12 @@ def mock_truenas_api_responses():
             "result": [
                 {
                     "name": "nginx-demo",
-                    "status": "running",
+                    "state": "RUNNING",
                     "created": "2025-07-30T10:00:00Z"
                 },
                 {
                     "name": "plex-server",
-                    "status": "stopped",
+                    "state": "STOPPED",
                     "created": "2025-07-29T15:30:00Z"
                 }
             ]
@@ -196,7 +196,7 @@ def mock_truenas_api_responses():
             "jsonrpc": "2.0",
             "result": {
                 "name": "nginx-demo",
-                "status": "running",
+                "state": "RUNNING",
                 "containers": ["nginx-demo-web-1"]
             }
         },
@@ -210,7 +210,7 @@ def mock_truenas_api_responses():
         "deploy_app_success": {
             "id": 5,
             "jsonrpc": "2.0",
-            "result": {"id": "new-app", "status": "deployed"}
+            "result": {"id": "new-app", "state": "DEPLOYING"}
         },
         
         "api_error": {
