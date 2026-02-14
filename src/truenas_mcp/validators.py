@@ -1,10 +1,14 @@
 """Security and validation rules for Docker Compose and TrueNAS configurations."""
 
+import os
 import re
 from typing import List, Tuple
 
 import structlog
 import yaml
+
+# Max YAML input size (100KB)
+MAX_YAML_SIZE = 100 * 1024
 
 logger = structlog.get_logger(__name__)
 
@@ -12,15 +16,19 @@ logger = structlog.get_logger(__name__)
 class ComposeValidator:
     """Validates Docker Compose YAML for security and TrueNAS compatibility."""
 
-    # Security violation patterns
+    # Security violation patterns (hard errors)
     SECURITY_VIOLATIONS = [
         (r"privileged:\s*true", "Privileged containers are not allowed"),
         (r"--privileged", "Privileged mode is not allowed"),
-        (r"network_mode:\s*host", "Host network mode should be avoided"),
         (r"pid:\s*host", "Host PID namespace is not allowed"),
         (r"ipc:\s*host", "Host IPC namespace is not allowed"),
-        (r"user:\s*root", "Running as root user is discouraged"),
-        (r"user:\s*0", "Running as UID 0 (root) is discouraged"),
+    ]
+
+    # Security warnings (not blocking)
+    SECURITY_WARNINGS = [
+        (r"network_mode:\s*host", "Warning: Host network mode should be avoided"),
+        (r"user:\s*root", "Warning: Running as root user is discouraged"),
+        (r"user:\s*0", "Warning: Running as UID 0 (root) is discouraged"),
     ]
 
     # Dangerous bind mount patterns
@@ -33,8 +41,8 @@ class ComposeValidator:
     # Warning patterns (not errors, but should be flagged)
     WARNING_PATTERNS = [
         (r"restart:\s*always", "Consider using 'unless-stopped' instead of 'always'"),
-        (r"ports:.*\*:", "Avoid binding to all interfaces (*) for security"),
-        (r"ports:.*0\.0\.0\.0:", "Avoid binding to all interfaces (0.0.0.0) for security"),
+        (r'"\*:', "Avoid binding to all interfaces (*) for security"),
+        (r'"0\.0\.0\.0:', "Avoid binding to all interfaces (0.0.0.0) for security"),
     ]
 
     async def validate(self, compose_yaml: str, check_security: bool = True) -> Tuple[bool, List[str]]:
@@ -42,7 +50,14 @@ class ComposeValidator:
         logger.info("Validating Docker Compose", check_security=check_security)
         
         issues = []
-        
+
+        # Input size validation
+        if len(compose_yaml.encode("utf-8")) > MAX_YAML_SIZE:
+            issues.append(
+                f"YAML input exceeds maximum allowed size of {MAX_YAML_SIZE} bytes"
+            )
+            return False, issues
+
         # YAML syntax validation
         try:
             compose_data = yaml.safe_load(compose_yaml)
@@ -63,12 +78,10 @@ class ComposeValidator:
         compatibility_issues = self._validate_truenas_compatibility(compose_data)
         issues.extend(compatibility_issues)
         
-        # Separate errors from warnings
-        errors = [issue for issue in issues if any(
-            error_pattern in issue.lower() 
-            for error_pattern in ["not allowed", "invalid", "missing", "required"]
-        )]
-        
+        # Warnings are explicitly prefixed with "Warning: "
+        # Everything else is an error
+        errors = [issue for issue in issues if not issue.startswith("Warning:")]
+
         is_valid = len(errors) == 0
         
         logger.info(
@@ -129,13 +142,18 @@ class ComposeValidator:
         for pattern, message in self.SECURITY_VIOLATIONS:
             if re.search(pattern, compose_yaml, re.IGNORECASE | re.MULTILINE):
                 issues.append(message)
-        
+
         # Check for dangerous bind mounts
         for pattern, message in self.DANGEROUS_MOUNTS:
             if re.search(pattern, compose_yaml, re.IGNORECASE | re.MULTILINE):
                 issues.append(message)
-        
-        # Check warning patterns
+
+        # Check security warnings
+        for pattern, message in self.SECURITY_WARNINGS:
+            if re.search(pattern, compose_yaml, re.IGNORECASE | re.MULTILINE):
+                issues.append(message)
+
+        # Check general warning patterns
         for pattern, message in self.WARNING_PATTERNS:
             if re.search(pattern, compose_yaml, re.IGNORECASE | re.MULTILINE):
                 issues.append(f"Warning: {message}")
@@ -173,7 +191,9 @@ class ComposeValidator:
                     # Validate TrueNAS path conventions
                     if ":" in volume:
                         host_path = volume.split(":")[0]
-                        if host_path.startswith("/") and not host_path.startswith("/mnt/"):
+                        # Normalize path to resolve traversal (e.g. /mnt/pool/../etc)
+                        normalized = os.path.normpath(host_path)
+                        if normalized.startswith("/") and not normalized.startswith("/mnt/"):
                             issues.append(
                                 f"Service '{service_name}': Host paths should start with /mnt/ "
                                 f"to use TrueNAS pools"
@@ -183,17 +203,17 @@ class ComposeValidator:
             ports = service_config.get("ports", [])
             for port in ports:
                 if isinstance(port, str):
-                    try:
-                        if ":" in port:
-                            host_port = port.split(":")[0]
-                            host_port_int = int(host_port)
-                            if host_port_int < 1024 and host_port_int != 80 and host_port_int != 443:
+                    if ":" in port:
+                        host_port_str = port.split(":")[0]
+                        try:
+                            host_port_int = int(host_port_str)
+                            if host_port_int < 1024 and host_port_int not in (80, 443):
                                 issues.append(
-                                    f"Service '{service_name}': Privileged ports (<1024) "
+                                    f"Service '{service_name}': Privileged port {host_port_int} (<1024) "
                                     f"may require special configuration"
                                 )
-                    except ValueError:
-                        issues.append(f"Service '{service_name}': Invalid port format '{port}'")
+                        except ValueError:
+                            issues.append(f"Service '{service_name}': Invalid port format '{port}'")
         
         # Check for external networks (not directly supported)
         networks = compose_data.get("networks", {})

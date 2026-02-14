@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Optional
 
 import structlog
 from mcp.types import TextContent, Tool
-from pydantic import BaseModel, Field, validator
 
 from .truenas_client import TrueNASClient
 
@@ -240,36 +239,6 @@ class MCPToolsHandler:
                 },
             ),
             
-            # Diagnostic & Convenience Tools
-            Tool(
-                name="diagnose_docker_issues",
-                description="Diagnose Docker engine issues and network conflicts",
-                inputSchema={"type": "object", "properties": {}, "additionalProperties": False}
-            ),
-            Tool(
-                name="cleanup_stale_containers", 
-                description="Clean up stale containers and fix conflicts",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "force": {"type": "boolean", "default": False}
-                    },
-                    "additionalProperties": False
-                }
-            ),
-            Tool(
-                name="bulk_app_operation",
-                description="Start/stop multiple apps at once",
-                inputSchema={
-                    "type": "object", 
-                    "properties": {
-                        "operation": {"type": "string", "enum": ["start", "stop"]},
-                        "app_names": {"type": "array", "items": {"type": "string"}}
-                    },
-                    "required": ["operation", "app_names"],
-                    "additionalProperties": False
-                }
-            ),
         ]
 
     async def call_tool(self, name: str, arguments: Dict[str, Any]) -> TextContent:
@@ -367,9 +336,9 @@ class MCPToolsHandler:
                 text="No Custom Apps found"
             )
         
-        result = "Custom Apps:\\n"
+        result = "Custom Apps:\n"
         for app in apps:
-            result += f"- {app['name']}: {app['status']}\\n"
+            result += f"- {app['name']}: {app['status']}\n"
         
         return TextContent(type="text", text=result)
     
@@ -486,16 +455,16 @@ class MCPToolsHandler:
                 text="✅ Docker Compose is valid and secure"
             )
         elif is_valid and issues:
-            warnings = "\\n".join([f"⚠️ {issue}" for issue in issues])
+            warnings = "\n".join([f"⚠️ {issue}" for issue in issues])
             return TextContent(
                 type="text",
-                text=f"✅ Docker Compose is valid but has warnings:\\n{warnings}"
+                text=f"✅ Docker Compose is valid but has warnings:\n{warnings}"
             )
         else:
-            errors = "\\n".join([f"❌ {issue}" for issue in issues])
+            errors = "\n".join([f"❌ {issue}" for issue in issues])
             return TextContent(
                 type="text",
-                text=f"❌ Docker Compose validation failed:\\n{errors}"
+                text=f"❌ Docker Compose validation failed:\n{errors}"
             )
     
     async def _get_app_logs(
@@ -510,7 +479,7 @@ class MCPToolsHandler:
         if logs:
             return TextContent(
                 type="text",
-                text=f"Logs for '{app_name}':\\n{logs}"
+                text=f"Logs for '{app_name}':\n{logs}"
             )
         else:
             return TextContent(

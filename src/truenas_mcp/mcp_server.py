@@ -24,6 +24,7 @@ class TrueNASMCPServer:
         self.server = Server("truenas-scale-mcp")
         self.truenas_client: TrueNASClient | None = None
         self.tools_handler: MCPToolsHandler | None = None
+        self._init_lock = asyncio.Lock()
         
         # Configuration from environment
         self.config = {
@@ -89,7 +90,14 @@ class TrueNASMCPServer:
             return await self.tools_handler.call_tool(name, arguments)
 
     async def _initialize_clients(self) -> None:
-        """Initialize TrueNAS client and tools handler."""
+        """Initialize TrueNAS client and tools handler (thread-safe)."""
+        async with self._init_lock:
+            if self.tools_handler is not None:
+                return  # Already initialized
+            await self._do_initialize_clients()
+
+    async def _do_initialize_clients(self) -> None:
+        """Perform actual client initialization."""
         if self.config["mock_mode"]:
             from .mock_client import MockTrueNASClient
             self.truenas_client = MockTrueNASClient()

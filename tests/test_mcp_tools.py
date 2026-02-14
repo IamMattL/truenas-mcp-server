@@ -23,10 +23,10 @@ class TestMCPToolsHandler:
 
     @pytest.mark.asyncio
     async def test_list_tools(self, tools_handler):
-        """Test tool listing returns all 11 tools."""
+        """Test tool listing returns all 10 tools."""
         tools = await tools_handler.list_tools()
-        
-        assert len(tools) == 11
+
+        assert len(tools) == 10
         
         tool_names = [tool.name for tool in tools]
         expected_tools = [
@@ -154,15 +154,15 @@ services:
     async def test_delete_custom_app_confirmed(self, tools_handler):
         """Test deleting Custom App with confirmation."""
         result = await tools_handler.call_tool("delete_custom_app", {
-            "app_name": "test-app",
+            "app_name": "nginx-demo",
             "delete_volumes": False,
             "confirm_deletion": True
         })
-        
+
         assert result.type == "text"
         assert "✅" in result.text
         assert "Deleted" in result.text
-        assert "test-app" in result.text
+        assert "nginx-demo" in result.text
 
     @pytest.mark.asyncio
     async def test_delete_custom_app_not_confirmed(self, tools_handler):

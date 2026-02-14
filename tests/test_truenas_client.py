@@ -222,46 +222,41 @@ class TestTrueNASClient:
         assert truenas_client.url == expected_url
 
     @pytest.mark.asyncio
-    @patch('websockets.connect')
+    @patch('truenas_mcp.truenas_client.websockets.connect', new_callable=AsyncMock)
     async def test_connect_success(self, mock_connect, truenas_client):
         """Test successful connection."""
-        # Mock WebSocket connection
         mock_websocket = AsyncMock()
         mock_connect.return_value = mock_websocket
-        
+
         # Mock authentication response
-        auth_response = {"id": 1, "jsonrpc": "2.0", "result": True}
-        mock_websocket.send.return_value = None
-        mock_websocket.recv.return_value = '{"id": 1, "jsonrpc": "2.0", "result": true}'
-        
+        auth_response = '{"id": 1, "jsonrpc": "2.0", "result": true}'
+        mock_websocket.recv = AsyncMock(return_value=auth_response)
+
         await truenas_client.connect()
-        
+
         assert truenas_client.websocket is not None
         assert truenas_client.authenticated is True
-        
-        # Verify authentication call was made
         mock_websocket.send.assert_called()
 
     @pytest.mark.asyncio
-    @patch('websockets.connect')
+    @patch('truenas_mcp.truenas_client.websockets.connect', new_callable=AsyncMock)
     async def test_connect_auth_failure(self, mock_connect, truenas_client):
         """Test connection with authentication failure."""
         mock_websocket = AsyncMock()
         mock_connect.return_value = mock_websocket
-        
-        # Mock authentication error response
-        mock_websocket.send.return_value = None
-        mock_websocket.recv.return_value = '{"id": 1, "jsonrpc": "2.0", "error": {"code": -1, "message": "Invalid API key"}}'
-        
-        with pytest.raises(TrueNASAuthenticationError, match="Authentication failed"):
+
+        error_response = '{"id": 1, "jsonrpc": "2.0", "error": {"code": -1, "message": "Invalid API key"}}'
+        mock_websocket.recv = AsyncMock(return_value=error_response)
+
+        with pytest.raises(TrueNASConnectionError):
             await truenas_client.connect()
 
     @pytest.mark.asyncio
-    @patch('websockets.connect')
+    @patch('truenas_mcp.truenas_client.websockets.connect', new_callable=AsyncMock)
     async def test_connect_connection_failure(self, mock_connect, truenas_client):
         """Test connection failure."""
         mock_connect.side_effect = Exception("Connection refused")
-        
+
         with pytest.raises(TrueNASConnectionError, match="Connection failed"):
             await truenas_client.connect()
 

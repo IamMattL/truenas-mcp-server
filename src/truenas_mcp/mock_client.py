@@ -170,27 +170,25 @@ class MockTrueNASClient:
         await asyncio.sleep(0.2)
         
         issues = []
-        
+
         # Mock validation logic
         if "version" not in compose_yaml:
             issues.append("Missing version field in Docker Compose")
-        
+
         if "services" not in compose_yaml:
             issues.append("No services defined in Docker Compose")
-        
+
         if check_security:
             if "privileged: true" in compose_yaml:
                 issues.append("Privileged containers are not allowed")
-            
+
             if "/etc/" in compose_yaml:
-                issues.append("Mounting system directories is discouraged")
-        
-        # Mock some warnings
-        if "ports:" in compose_yaml and random.random() < 0.3:
-            issues.append("Consider using specific port bindings instead of ranges")
-        
-        is_valid = len([issue for issue in issues if "not allowed" in issue]) == 0
-        
+                issues.append("System directory bind mounts are not allowed")
+
+        # Errors are issues without "Warning:" prefix
+        errors = [issue for issue in issues if not issue.startswith("Warning:")]
+        is_valid = len(errors) == 0
+
         return is_valid, issues
 
     async def get_app_logs(
@@ -223,4 +221,4 @@ class MockTrueNASClient:
             ])
             mock_logs.append(f"[{timestamp}] {level}: {message}")
         
-        return "\\n".join(mock_logs)
+        return "\n".join(mock_logs)
