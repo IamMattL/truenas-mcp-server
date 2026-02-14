@@ -29,7 +29,9 @@ class TrueNASMCPServer:
         # Configuration from environment
         self.config = {
             "truenas_host": os.getenv("TRUENAS_HOST", "nas.pvnkn3t.lan"),
+            "truenas_password": os.getenv("TRUENAS_PASSWORD"),
             "truenas_api_key": os.getenv("TRUENAS_API_KEY"),
+            "truenas_username": os.getenv("TRUENAS_USERNAME", "mcp-service"),
             "truenas_port": int(os.getenv("TRUENAS_PORT", "443")),
             "truenas_protocol": os.getenv("TRUENAS_PROTOCOL", "wss"),
             "ssl_verify": os.getenv("TRUENAS_SSL_VERIFY", "true").lower() == "true",
@@ -74,20 +76,21 @@ class TrueNASMCPServer:
 
     def _register_handlers(self) -> None:
         """Register MCP protocol handlers."""
-        
+        # Static tool definitions - no connection needed
+        static_tools_handler = MCPToolsHandler(None)
+
         @self.server.list_tools()
         async def list_tools() -> List[Tool]:
-            """List available MCP tools."""
-            if not self.tools_handler:
-                await self._initialize_clients()
-            return await self.tools_handler.list_tools()
+            """List available MCP tools (static, no connection required)."""
+            return await static_tools_handler.list_tools()
 
         @self.server.call_tool()
         async def call_tool(name: str, arguments: Dict[str, Any]) -> Any:
-            """Execute an MCP tool."""
+            """Execute an MCP tool (connects on first call)."""
             if not self.tools_handler:
                 await self._initialize_clients()
-            return await self.tools_handler.call_tool(name, arguments)
+            result = await self.tools_handler.call_tool(name, arguments)
+            return [result]
 
     async def _initialize_clients(self) -> None:
         """Initialize TrueNAS client and tools handler (thread-safe)."""
@@ -103,11 +106,13 @@ class TrueNASMCPServer:
             self.truenas_client = MockTrueNASClient()
             logger.info("Using mock TrueNAS client for development")
         else:
-            if not self.config["truenas_api_key"]:
-                raise ValueError("TRUENAS_API_KEY environment variable required")
-            
+            if not self.config["truenas_password"] and not self.config["truenas_api_key"]:
+                raise ValueError("TRUENAS_PASSWORD or TRUENAS_API_KEY environment variable required")
+
             self.truenas_client = TrueNASClient(
                 host=self.config["truenas_host"],
+                username=self.config["truenas_username"],
+                password=self.config["truenas_password"],
                 api_key=self.config["truenas_api_key"],
                 port=self.config["truenas_port"],
                 protocol=self.config["truenas_protocol"],
@@ -124,7 +129,8 @@ class TrueNASMCPServer:
     async def run(self, read_stream, write_stream) -> None:
         """Run the MCP server."""
         logger.info("Starting TrueNAS MCP Server")
-        await self.server.run(read_stream, write_stream)
+        init_options = self.server.create_initialization_options()
+        await self.server.run(read_stream, write_stream, init_options)
 
     async def cleanup(self) -> None:
         """Cleanup resources."""

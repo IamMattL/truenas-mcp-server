@@ -116,20 +116,15 @@ class MockTrueNASClient:
         logger.info("Mock: Deploying app", app=app_name, auto_start=auto_start)
         await asyncio.sleep(1.0)  # Simulate deployment time
         
-        # Simulate deployment success/failure (90% success rate)
-        if random.random() < 0.9:
-            # Add new app to mock data
-            self.mock_apps[app_name] = {
-                "name": app_name,
-                "status": "running" if auto_start else "stopped",
-                "containers": [f"{app_name}-service-1"],
-                "ports": ["8080:80"],  # Mock port
-                "created": "2025-07-30T12:00:00Z",
-            }
-            return True
-        else:
-            logger.warning("Mock: Simulated deployment failure")
-            return False
+        # Add new app to mock data
+        self.mock_apps[app_name] = {
+            "name": app_name,
+            "status": "running" if auto_start else "stopped",
+            "containers": [f"{app_name}-service-1"],
+            "ports": ["8080:80"],  # Mock port
+            "created": "2025-07-30T12:00:00Z",
+        }
+        return True
 
     async def update_app(
         self,

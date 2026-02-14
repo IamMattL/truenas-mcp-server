@@ -13,8 +13,8 @@ logger = structlog.get_logger(__name__)
 class MCPToolsHandler:
     """Handler for all MCP tools."""
 
-    def __init__(self, truenas_client: TrueNASClient) -> None:
-        """Initialize tools handler."""
+    def __init__(self, truenas_client: Optional[TrueNASClient]) -> None:
+        """Initialize tools handler. Client can be None for static tool listing."""
         self.client = truenas_client
 
     async def list_tools(self) -> List[Tool]:

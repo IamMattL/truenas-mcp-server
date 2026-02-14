@@ -1,21 +1,16 @@
-"""TrueNAS API client for WebSocket communication."""
+"""TrueNAS API client wrapping the official truenas_api_client."""
 
 import asyncio
-import json
+import functools
 from typing import Any, Dict, List, Optional, Tuple
 
 import structlog
-import websockets
-from websockets.exceptions import ConnectionClosed, WebSocketException
+from truenas_api_client import Client as TNClient, ClientException
 
 logger = structlog.get_logger(__name__)
 
 # Request timeout in seconds
 REQUEST_TIMEOUT = 30
-
-# Reconnection settings
-MAX_RECONNECT_ATTEMPTS = 3
-RECONNECT_BASE_DELAY = 1  # seconds
 
 
 class TrueNASConnectionError(Exception):
@@ -31,167 +26,139 @@ class TrueNASAPIError(Exception):
 
 
 class TrueNASClient:
-    """WebSocket client for TrueNAS Electric Eel API."""
+    """Async wrapper around the official TrueNAS API client.
+
+    Uses truenas_api_client (synchronous, websocket-client based) with
+    asyncio.run_in_executor() for non-blocking operation in the MCP server.
+
+    Supports two auth modes:
+    - Password auth (PASSWORD_PLAIN): Preferred, no transport restrictions.
+    - API key auth (API_KEY_PLAIN): Subject to TrueNAS NEP secure_transport
+      check which auto-revokes keys on connections it considers insecure.
+    """
 
     def __init__(
         self,
         host: str,
-        api_key: str,
+        username: str = "mcp-service",
+        password: Optional[str] = None,
+        api_key: Optional[str] = None,
         port: int = 443,
         protocol: str = "wss",
         ssl_verify: bool = True,
     ) -> None:
-        """Initialize TrueNAS client."""
+        """Initialize TrueNAS client.
+
+        Args:
+            host: TrueNAS hostname or IP.
+            username: Username for authentication.
+            password: Password for PASSWORD_PLAIN auth (preferred).
+            api_key: API key for API_KEY_PLAIN auth (fallback).
+            port: WebSocket port (default 443).
+            protocol: ws or wss (default wss).
+            ssl_verify: Whether to verify SSL certificates.
+        """
+        if not password and not api_key:
+            raise ValueError("Either password or api_key must be provided")
+
         self.host = host
+        self.username = username
+        self.password = password
         self.api_key = api_key
         self.port = port
         self.protocol = protocol
         self.ssl_verify = ssl_verify
 
-        self.websocket: Optional[websockets.WebSocketClientProtocol] = None
+        self._client: Optional[TNClient] = None
         self.authenticated = False
-        self.request_id = 0
-        self._send_lock = asyncio.Lock()
 
     @property
     def url(self) -> str:
         """Get WebSocket URL."""
         return f"{self.protocol}://{self.host}:{self.port}/api/current"
 
-    async def connect(self) -> None:
-        """Connect to TrueNAS WebSocket API."""
-        try:
-            logger.info("Connecting to TrueNAS", url=self.url)
+    async def _run_sync(self, func: Any, *args: Any, **kwargs: Any) -> Any:
+        """Run a synchronous function in a thread executor."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, functools.partial(func, *args, **kwargs)
+        )
 
-            # WebSocket connection with SSL context handling
-            ssl_context = None
-            if not self.ssl_verify and self.protocol == "wss":
-                import ssl
-                ssl_context = ssl.create_default_context()
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_NONE
+    def _connect_sync(self) -> None:
+        """Synchronous connect and authenticate.
 
-            self.websocket = await websockets.connect(
-                self.url,
-                ssl=ssl_context,
-                ping_interval=30,
-                ping_timeout=10,
+        Uses PASSWORD_PLAIN (via auth.login) if a password is configured,
+        falling back to API_KEY_PLAIN (via auth.login_ex) if only an API
+        key is available. Password auth is preferred because TrueNAS NEP
+        auto-revokes API keys used over connections it considers insecure.
+        """
+        self._client = TNClient(uri=self.url, verify_ssl=self.ssl_verify)
+
+        if self.password:
+            result = self._client.call(
+                "auth.login", self.username, self.password, None
             )
+            if not result:
+                raise ValueError("Invalid username or password")
+        elif self.api_key:
+            resp = self._client.call("auth.login_ex", {
+                "mechanism": "API_KEY_PLAIN",
+                "username": self.username,
+                "api_key": self.api_key,
+            })
+            resp_type = resp.get("response_type")
+            if resp_type == "SUCCESS":
+                return
+            elif resp_type == "AUTH_ERR":
+                raise ValueError("Invalid API key or username")
+            elif resp_type == "EXPIRED":
+                raise ValueError("API key has been revoked or expired")
+            else:
+                raise ValueError(f"Unexpected auth response: {resp_type}")
 
-            # Authenticate with API key
-            await self._authenticate()
-
-            logger.info("Connected to TrueNAS successfully")
-
-        except Exception as e:
+    async def connect(self) -> None:
+        """Connect to TrueNAS WebSocket API and authenticate."""
+        try:
+            logger.info("Connecting to TrueNAS", url=self.url, username=self.username)
+            await self._run_sync(self._connect_sync)
+            self.authenticated = True
+            logger.info("Connected and authenticated to TrueNAS successfully")
+        except ClientException as e:
             logger.error("Failed to connect to TrueNAS", error=str(e))
+            raise TrueNASConnectionError(f"Connection failed: {e}")
+        except ValueError as e:
+            logger.error("Authentication failed", error=str(e))
+            raise TrueNASAuthenticationError(f"Authentication failed: {e}")
+        except Exception as e:
+            logger.error("Unexpected error connecting to TrueNAS", error=str(e))
             raise TrueNASConnectionError(f"Connection failed: {e}")
 
     async def disconnect(self) -> None:
         """Disconnect from TrueNAS."""
-        if self.websocket:
-            await self.websocket.close()
-            self.websocket = None
+        if self._client:
+            try:
+                await self._run_sync(self._client.close)
+            except Exception:
+                pass
+            self._client = None
             self.authenticated = False
             logger.info("Disconnected from TrueNAS")
 
-    async def _reconnect(self) -> None:
-        """Reconnect to TrueNAS with exponential backoff."""
-        self.websocket = None
-        self.authenticated = False
-
-        for attempt in range(1, MAX_RECONNECT_ATTEMPTS + 1):
-            delay = RECONNECT_BASE_DELAY * (2 ** (attempt - 1))
-            logger.info(
-                "Attempting reconnection",
-                attempt=attempt,
-                max_attempts=MAX_RECONNECT_ATTEMPTS,
-                delay=delay,
-            )
-            await asyncio.sleep(delay)
-            try:
-                await self.connect()
-                logger.info("Reconnection successful", attempt=attempt)
-                return
-            except TrueNASConnectionError:
-                if attempt == MAX_RECONNECT_ATTEMPTS:
-                    raise
-                logger.warning("Reconnection attempt failed", attempt=attempt)
-
-    async def _authenticate(self) -> None:
-        """Authenticate with TrueNAS using API key."""
-        auth_request = {
-            "id": self._next_request_id(),
-            "jsonrpc": "2.0",
-            "method": "auth.login_with_api_key",
-            "params": [self.api_key],
-        }
-
-        response = await self._send_request(auth_request, allow_reconnect=False)
-
-        if "error" in response:
-            raise TrueNASAuthenticationError(f"Authentication failed: {response['error']}")
-
-        self.authenticated = True
-        logger.info("Authenticated with TrueNAS successfully")
-
-    def _next_request_id(self) -> int:
-        """Get next request ID."""
-        self.request_id += 1
-        return self.request_id
-
-    async def _send_request(
-        self,
-        request: Dict[str, Any],
-        allow_reconnect: bool = True,
-    ) -> Dict[str, Any]:
-        """Send JSON-RPC request and return response.
-
-        Uses a lock to prevent concurrent request/response interleaving,
-        and a timeout to avoid hanging on unresponsive servers.
-        """
-        async with self._send_lock:
-            return await self._send_request_unlocked(request, allow_reconnect)
-
-    async def _send_request_unlocked(
-        self,
-        request: Dict[str, Any],
-        allow_reconnect: bool,
-    ) -> Dict[str, Any]:
-        """Internal send without lock (caller must hold _send_lock)."""
-        if not self.websocket:
+    async def _call(self, method: str, *params: Any) -> Any:
+        """Make an API call via the official client."""
+        if not self._client:
             raise TrueNASConnectionError("Not connected to TrueNAS")
 
         try:
-            await self.websocket.send(json.dumps(request))
-
-            response_str = await asyncio.wait_for(
-                self.websocket.recv(), timeout=REQUEST_TIMEOUT
-            )
-            response = json.loads(response_str)
-
-            logger.debug("API request/response", method=request.get("method"))
-
-            return response
-
-        except asyncio.TimeoutError:
-            logger.error("Request timed out", method=request.get("method"))
-            raise TrueNASConnectionError(
-                f"Request timed out after {REQUEST_TIMEOUT}s"
-            )
-        except ConnectionClosed:
-            logger.error("WebSocket connection closed")
-            if allow_reconnect:
-                await self._reconnect()
-                # Retry the request once after reconnection
-                return await self._send_request_unlocked(request, allow_reconnect=False)
-            raise TrueNASConnectionError("Connection closed")
-        except WebSocketException as e:
-            logger.error("WebSocket error", error=str(e))
-            raise TrueNASConnectionError(f"WebSocket error: {e}")
-        except json.JSONDecodeError as e:
-            logger.error("Invalid JSON response", error=str(e))
-            raise TrueNASAPIError(f"Invalid JSON: {e}")
+            result = await self._run_sync(self._client.call, method, *params)
+            logger.debug("API call completed", method=method)
+            return result
+        except ClientException as e:
+            error_str = str(e)
+            if "ENOTAUTHENTICATED" in error_str:
+                raise TrueNASAuthenticationError(f"Not authenticated: {e}")
+            logger.error("API call failed", method=method, error=error_str)
+            raise TrueNASAPIError(f"API call {method} failed: {e}")
 
     async def test_connection(self) -> bool:
         """Test connection to TrueNAS."""
@@ -199,38 +166,16 @@ class TrueNASClient:
             if not self.authenticated:
                 await self.connect()
 
-            # Simple API call to test connectivity
-            request = {
-                "id": self._next_request_id(),
-                "jsonrpc": "2.0",
-                "method": "core.ping",
-                "params": [],
-            }
-
-            response = await self._send_request(request)
-            return "error" not in response
-
+            result = await self._call("core.ping")
+            return result == "pong"
         except Exception as e:
             logger.error("Connection test failed", error=str(e))
             return False
 
     async def list_custom_apps(self, status_filter: str = "all") -> List[Dict[str, Any]]:
         """List Custom Apps."""
-        request = {
-            "id": self._next_request_id(),
-            "jsonrpc": "2.0",
-            "method": "app.query",
-            "params": [{}],  # Empty filter for all apps
-        }
+        apps = await self._call("app.query")
 
-        response = await self._send_request(request)
-
-        if "error" in response:
-            raise TrueNASAPIError(f"Failed to list apps: {response['error']}")
-
-        apps = response.get("result", [])
-
-        # Filter by status if specified
         if status_filter != "all":
             apps = [app for app in apps if app.get("status") == status_filter]
 
@@ -238,44 +183,24 @@ class TrueNASClient:
 
     async def get_app_status(self, app_name: str) -> str:
         """Get Custom App status."""
-        request = {
-            "id": self._next_request_id(),
-            "jsonrpc": "2.0",
-            "method": "app.get_instance",
-            "params": [app_name],
-        }
-
-        response = await self._send_request(request)
-
-        if "error" in response:
-            raise TrueNASAPIError(f"Failed to get app status: {response['error']}")
-
-        app_data = response.get("result", {})
+        app_data = await self._call("app.get_instance", app_name)
         return app_data.get("status", "unknown")
 
     async def start_app(self, app_name: str) -> bool:
         """Start Custom App."""
-        request = {
-            "id": self._next_request_id(),
-            "jsonrpc": "2.0",
-            "method": "app.start",
-            "params": [app_name],
-        }
-
-        response = await self._send_request(request)
-        return "error" not in response
+        try:
+            await self._call("app.start", app_name)
+            return True
+        except TrueNASAPIError:
+            return False
 
     async def stop_app(self, app_name: str) -> bool:
         """Stop Custom App."""
-        request = {
-            "id": self._next_request_id(),
-            "jsonrpc": "2.0",
-            "method": "app.stop",
-            "params": [app_name],
-        }
-
-        response = await self._send_request(request)
-        return "error" not in response
+        try:
+            await self._call("app.stop", app_name)
+            return True
+        except TrueNASAPIError:
+            return False
 
     async def deploy_app(
         self,
@@ -284,26 +209,17 @@ class TrueNASClient:
         auto_start: bool = True,
     ) -> bool:
         """Deploy Custom App from Docker Compose."""
-        # Convert Docker Compose to TrueNAS format
         from .compose_converter import DockerComposeConverter
 
         converter = DockerComposeConverter()
         app_config = await converter.convert(compose_yaml, app_name)
 
-        request = {
-            "id": self._next_request_id(),
-            "jsonrpc": "2.0",
-            "method": "app.create",
-            "params": [app_config],
-        }
-
-        response = await self._send_request(request)
-
-        if "error" in response:
-            logger.error("App deployment failed", error=response["error"])
+        try:
+            await self._call("app.create", app_config)
+        except TrueNASAPIError as e:
+            logger.error("App deployment failed", error=str(e))
             return False
 
-        # Start app if requested
         if auto_start:
             await self.start_app(app_name)
 
@@ -321,27 +237,19 @@ class TrueNASClient:
         converter = DockerComposeConverter()
         app_config = await converter.convert(compose_yaml, app_name)
 
-        request = {
-            "id": self._next_request_id(),
-            "jsonrpc": "2.0",
-            "method": "app.update",
-            "params": [app_name, app_config],
-        }
-
-        response = await self._send_request(request)
-        return "error" not in response
+        try:
+            await self._call("app.update", app_name, app_config)
+            return True
+        except TrueNASAPIError:
+            return False
 
     async def delete_app(self, app_name: str, delete_volumes: bool = False) -> bool:
         """Delete Custom App."""
-        request = {
-            "id": self._next_request_id(),
-            "jsonrpc": "2.0",
-            "method": "app.delete",
-            "params": [app_name, delete_volumes],
-        }
-
-        response = await self._send_request(request)
-        return "error" not in response
+        try:
+            await self._call("app.delete", app_name, delete_volumes)
+            return True
+        except TrueNASAPIError:
+            return False
 
     async def validate_compose(
         self,
@@ -361,27 +269,16 @@ class TrueNASClient:
         service_name: Optional[str] = None,
     ) -> str:
         """Get Custom App logs."""
-        # Get container IDs for the app
-        container_request = {
-            "id": self._next_request_id(),
-            "jsonrpc": "2.0",
-            "method": "app.container_ids",
-            "params": [app_name],
-        }
-
-        response = await self._send_request(container_request)
-
-        if "error" in response:
-            raise TrueNASAPIError(f"Failed to get container IDs: {response['error']}")
-
-        container_ids = response.get("result", [])
+        try:
+            container_ids = await self._call("app.container_ids", app_name)
+        except TrueNASAPIError as e:
+            raise TrueNASAPIError(f"Failed to get container IDs: {e}")
 
         if not container_ids:
             return "No containers found for this app"
 
-        # Get logs from first container (or specific service)
-        container_id = container_ids[0]  # Simplified for now
-
-        # Note: Actual log retrieval would need additional API methods
-        # This is a placeholder implementation
-        return f"Logs for {app_name} (container {container_id}):\n[Log retrieval not fully implemented in TrueNAS API]"
+        container_id = container_ids[0]
+        return (
+            f"Logs for {app_name} (container {container_id}):\n"
+            "[Log retrieval not fully implemented in TrueNAS API]"
+        )

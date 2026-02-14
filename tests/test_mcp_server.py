@@ -16,7 +16,7 @@ class TestTrueNASMCPServer:
         """Mock environment variables."""
         env_vars = {
             "TRUENAS_HOST": "test.example.com",
-            "TRUENAS_API_KEY": "test-api-key",
+            "TRUENAS_PASSWORD": "test-password",
             "TRUENAS_PORT": "443",
             "TRUENAS_PROTOCOL": "wss",
             "TRUENAS_SSL_VERIFY": "false",
@@ -35,7 +35,7 @@ class TestTrueNASMCPServer:
     def test_server_initialization(self, server):
         """Test server initialization with environment variables."""
         assert server.config["truenas_host"] == "test.example.com"
-        assert server.config["truenas_api_key"] == "test-api-key"
+        assert server.config["truenas_password"] == "test-password"
         assert server.config["truenas_port"] == 443
         assert server.config["truenas_protocol"] == "wss"
         assert server.config["ssl_verify"] is False
@@ -48,6 +48,7 @@ class TestTrueNASMCPServer:
             server = TrueNASMCPServer()
 
             assert server.config["truenas_host"] == "nas.pvnkn3t.lan"
+            assert server.config["truenas_password"] is None
             assert server.config["truenas_api_key"] is None
             assert server.config["truenas_port"] == 443
             assert server.config["truenas_protocol"] == "wss"
@@ -74,24 +75,24 @@ class TestTrueNASMCPServer:
         assert server.tools_handler is first_handler  # Same instance
 
     @pytest.mark.asyncio
-    async def test_initialize_clients_real_mode_no_api_key(self):
-        """Test client initialization in real mode without API key."""
+    async def test_initialize_clients_real_mode_no_credentials(self):
+        """Test client initialization in real mode without credentials."""
         with patch.dict(os.environ, {"MOCK_TRUENAS": "false"}, clear=False):
             server = TrueNASMCPServer()
 
-            with pytest.raises(ValueError, match="TRUENAS_API_KEY environment variable required"):
+            with pytest.raises(ValueError, match="TRUENAS_PASSWORD or TRUENAS_API_KEY environment variable required"):
                 await server._initialize_clients()
 
     @pytest.mark.asyncio
     @patch('truenas_mcp.mcp_server.TrueNASClient')
-    async def test_initialize_clients_real_mode_with_api_key(self, mock_client_class):
-        """Test client initialization in real mode with API key."""
+    async def test_initialize_clients_real_mode_with_password(self, mock_client_class):
+        """Test client initialization in real mode with password."""
         mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
 
         env_vars = {
             "TRUENAS_HOST": "test.example.com",
-            "TRUENAS_API_KEY": "test-api-key",
+            "TRUENAS_PASSWORD": "test-password",
             "MOCK_TRUENAS": "false",
         }
 
@@ -102,7 +103,9 @@ class TestTrueNASMCPServer:
             # Check client was created with correct parameters
             mock_client_class.assert_called_once_with(
                 host="test.example.com",
-                api_key="test-api-key",
+                username="mcp-service",
+                password="test-password",
+                api_key=None,
                 port=443,
                 protocol="wss",
                 ssl_verify=True,
@@ -144,7 +147,12 @@ class TestTrueNASMCPServer:
 
         await server.run(*mock_streams)
 
-        server.server.run.assert_called_once_with(*mock_streams)
+        server.server.run.assert_called_once()
+        call_args = server.server.run.call_args
+        assert call_args[0][0] is mock_streams[0]
+        assert call_args[0][1] is mock_streams[1]
+        # Third argument should be initialization options
+        assert len(call_args[0]) == 3
 
     @pytest.mark.asyncio
     async def test_tools_handler_integration(self, server):

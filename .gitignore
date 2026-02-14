@@ -150,6 +150,9 @@ cython_debug/
 ehthumbs.db
 Thumbs.db
 
+# MCP config (contains API keys)
+.mcp.json
+
 # Project specific
 .env.local
 .env.development
