@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "truenas-scale-mcp-server"
-version = "0.1.0"
+version = "1.0.0"
 description = "Model Context Protocol server for TrueNAS Scale Custom Apps management"
 authors = ["Your Name <your.email@example.com>"]
 readme = "README.md"
