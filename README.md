@@ -90,9 +90,11 @@ poetry run python -m truenas_mcp.mcp_server
 
 ## Claude Code Integration
 
-The MCP server configuration must be added to `~/.claude.json` under the `mcpServers` key. The server MUST be run with `-m truenas_mcp.mcp_server` (not as a direct script) due to relative imports, and requires `PYTHONPATH` set to the `src/` directory.
+The MCP server configuration must be added to `~/.claude.json` under the `mcpServers` key.
 
-### Configuration File Location
+### Recommended: Using run_mcp.sh
+
+The included `run_mcp.sh` script handles virtualenv resolution and module execution automatically via `poetry run`. This avoids hardcoding the Poetry virtualenv path (which contains a hash that changes if the venv is recreated).
 
 Add to your `~/.claude.json`:
 
@@ -101,11 +103,10 @@ Add to your `~/.claude.json`:
   "mcpServers": {
     "truenas-scale": {
       "type": "stdio",
-      "command": "/home/matt/.cache/pypoetry/virtualenvs/truenas-scale-mcp-server-qAqdQS1L-py3.12/bin/python",
-      "args": ["-m", "truenas_mcp.mcp_server"],
+      "command": "/path/to/truenas-mcp-server/run_mcp.sh",
+      "args": [],
       "env": {
-        "PYTHONPATH": "/home/matt/Repos/truenas-mcp-server/src",
-        "TRUENAS_HOST": "nas.pvnkn3t.lan",
+        "TRUENAS_HOST": "your-truenas-host",
         "TRUENAS_USERNAME": "mcp-service",
         "TRUENAS_PASSWORD": "your-password",
         "TRUENAS_PORT": "443",
@@ -117,10 +118,34 @@ Add to your `~/.claude.json`:
 }
 ```
 
-Replace the paths with your actual Poetry virtualenv path and repository location. You can find your Poetry virtualenv path with:
+### Alternative: Direct Python Execution
+
+If you prefer to bypass Poetry, you can point directly at the virtualenv Python binary. This requires both the virtualenv path and `PYTHONPATH` to be set manually:
+
+```json
+{
+  "mcpServers": {
+    "truenas-scale": {
+      "type": "stdio",
+      "command": "/path/to/poetry/virtualenv/bin/python",
+      "args": ["-m", "truenas_mcp.mcp_server"],
+      "env": {
+        "PYTHONPATH": "/path/to/truenas-mcp-server/src",
+        "TRUENAS_HOST": "your-truenas-host",
+        "TRUENAS_USERNAME": "mcp-service",
+        "TRUENAS_PASSWORD": "your-password",
+        "TRUENAS_PORT": "443",
+        "TRUENAS_PROTOCOL": "wss",
+        "TRUENAS_SSL_VERIFY": "true"
+      }
+    }
+  }
+}
+```
+
+Find your Poetry virtualenv path with:
 
 ```bash
-cd /home/matt/Repos/truenas-mcp-server
 poetry env info --path
 ```
 
@@ -386,7 +411,16 @@ export TRUENAS_PASSWORD="your-password"
 
 **Cause:** Server must be run with `-m truenas_mcp.mcp_server` due to relative imports. Direct script execution (`python src/truenas_mcp/mcp_server.py`) fails in MCP context.
 
-**Solution:** Ensure MCP configuration uses module execution:
+**Solution:** Use `run_mcp.sh` which handles this automatically:
+
+```json
+{
+  "command": "/path/to/truenas-mcp-server/run_mcp.sh",
+  "args": []
+}
+```
+
+Or if using direct Python execution, ensure module mode with `PYTHONPATH`:
 
 ```json
 {
