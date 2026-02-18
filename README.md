@@ -8,13 +8,13 @@ This MCP server wraps the official `truenas_api_client` (synchronous, websocket-
 
 ## Features
 
-- **10 MCP Tools** for complete Custom App lifecycle management
+- **20 MCP Tools** for complete app lifecycle, filesystem, ZFS, and system management
 - **Docker Compose Conversion** to TrueNAS Custom App format with multi-service support
 - **Password-based Authentication** (recommended) with API key fallback
 - **Security Validation** preventing privileged containers and dangerous mounts
 - **Lazy Client Initialization** - TrueNAS connection on first tool call, not server startup
 - **Mock Development Mode** for testing without TrueNAS access
-- **Comprehensive Test Suite** - 110 tests passing, 88% coverage
+- **Comprehensive Test Suite** - 155 tests passing, 84% coverage
 - **Thread-safe Async Wrapper** around synchronous TrueNAS API client
 
 ## Compatibility
@@ -216,53 +216,72 @@ SCRAM mechanisms are not available in the current TrueNAS API.
 
 ## Available MCP Tools
 
-The server provides 10 MCP tools for Custom App management:
+The server provides 20 MCP tools across five categories:
 
 ### Connection Management
 - **`test_connection`** - Test TrueNAS API connectivity and authentication
 
-### Custom App Lifecycle
-- **`list_custom_apps`** - List all Custom Apps with optional status filter
-- **`get_custom_app_status`** - Get detailed status information for a specific app
-- **`start_custom_app`** - Start a stopped Custom App
-- **`stop_custom_app`** - Stop a running Custom App
+### App Lifecycle
+- **`list_custom_apps`** - List all apps with optional status filter (running/stopped/error/all)
+- **`get_custom_app_status`** - Get status for a specific app
+- **`get_custom_app_config`** - Get full app configuration (containers, images, ports, volumes, metadata)
+- **`start_custom_app`** - Start a stopped app
+- **`stop_custom_app`** - Stop a running app
 
 ### Deployment and Updates
-- **`deploy_custom_app`** - Deploy a new Custom App from Docker Compose
-- **`update_custom_app`** - Update existing Custom App configuration
-- **`delete_custom_app`** - Remove a Custom App, optionally including volumes
+- **`deploy_custom_app`** - Deploy a new Custom App from Docker Compose YAML
+- **`update_custom_app`** - Update an app with new Docker Compose YAML
+- **`update_custom_app_config`** - Update specific config fields without full Compose YAML
+- **`delete_custom_app`** - Remove an app, optionally including data volumes
 
 ### Validation and Monitoring
-- **`validate_compose`** - Validate Docker Compose for TrueNAS compatibility
-- **`get_app_logs`** - Retrieve application logs with configurable line limit
+- **`validate_compose`** - Validate Docker Compose YAML for TrueNAS compatibility
+- **`get_app_logs`** - Retrieve app logs with configurable line limit and service filter
+
+### Filesystem
+- **`list_directory`** - Browse filesystem contents on TrueNAS (restricted to /mnt/)
+
+### ZFS Management
+- **`list_datasets`** - List ZFS datasets with usage information
+- **`list_snapshots`** - List ZFS snapshots with size information
+- **`create_snapshot`** - Create a ZFS snapshot for backup or rollback
+- **`delete_snapshot`** - Delete a ZFS snapshot
+
+### System Information
+- **`get_system_info`** - Get system info (hostname, version, uptime, CPU, RAM)
+- **`get_storage_pools`** - Get storage pool health, capacity, and scrub status
+- **`get_network_info`** - Get network interface information (IPs, link state, speed)
 
 ## Usage Examples
 
 Once configured in Claude Code, you can use natural language commands:
 
 ```
-# List all Custom Apps
-"List all my TrueNAS Custom Apps and their status"
+# App management
+"List all my TrueNAS apps and their status"
+"Show the full config of the tdarr app"
+"Stop the app named 'plex'"
+"Start the app named 'nextcloud'"
 
-# Deploy a new app from compose file
+# Deployment
 "Deploy this docker-compose.yml as a Custom App named 'my-app'"
-
-# Manage existing apps
-"Stop the Custom App named 'plex'"
-"Start the Custom App named 'nextcloud'"
-"Show detailed status of Custom App 'jellyfin'"
-
-# Get logs
-"Show me the last 50 lines of logs from Custom App 'nginx'"
-
-# Update app configuration
-"Update the Custom App 'web-server' with this new docker-compose.yml"
-
-# Delete an app
-"Delete the Custom App 'old-app' including its volumes"
-
-# Validate before deploying
+"Update the app 'web-server' with this new docker-compose.yml"
 "Validate this docker-compose.yml for TrueNAS compatibility"
+
+# Logs and monitoring
+"Show me the last 50 lines of logs from 'nginx'"
+
+# ZFS snapshots
+"Create a snapshot of Store/Media called 'pre-upgrade'"
+"List all snapshots for Store/Media"
+
+# System info
+"Show TrueNAS system info"
+"How much storage is available on my pools?"
+"Show network interface status"
+
+# Filesystem
+"List the contents of /mnt/Store/Media"
 ```
 
 ## Architecture
@@ -280,7 +299,7 @@ Once configured in Claude Code, you can use natural language commands:
 
 - **MCP Protocol Handler** (`mcp_server.py`) - Manages stdio transport and JSON-RPC 2.0 communication
 - **TrueNAS API Client** (`truenas_client.py`) - Async wrapper around synchronous `truenas_api_client.Client`
-- **Tools Handler** (`mcp_tools.py`) - Implements 10 MCP tools with JSON schema validation
+- **Tools Handler** (`mcp_tools.py`) - Implements 20 MCP tools with JSON schema validation
 - **Docker Compose Converter** (`compose_converter.py`) - Multi-service Docker Compose to TrueNAS format
 - **Mock Client** (`mock_client.py`) - In-memory TrueNAS simulator for development
 
@@ -342,10 +361,10 @@ The server enforces security constraints to prevent dangerous configurations:
 ### Running Tests
 
 ```bash
-# Run all tests (110 tests)
+# Run all tests (155 tests)
 poetry run pytest
 
-# Run with coverage report (88% coverage)
+# Run with coverage report (84% coverage)
 poetry run pytest --cov=src/truenas_mcp --cov-report=html
 
 # Run specific test categories
@@ -387,7 +406,7 @@ poetry run python -m truenas_mcp.mcp_server
 MOCK_TRUENAS=true poetry run python -m truenas_mcp.mcp_server
 ```
 
-The mock client simulates TrueNAS API behavior with in-memory state management, supporting all 10 tools.
+The mock client simulates TrueNAS API behavior with in-memory state management, supporting all 20 tools.
 
 ## Troubleshooting
 
@@ -487,7 +506,7 @@ Contributions are welcome! Please follow these steps:
 1. Fork the repository at [https://github.com/IamMattL/truenas-mcp-server](https://github.com/IamMattL/truenas-mcp-server)
 2. Create a feature branch: `git checkout -b feature/amazing-feature`
 3. Make your changes with clear, descriptive commits
-4. Run tests: `poetry run pytest` (ensure all 110 tests pass)
+4. Run tests: `poetry run pytest` (ensure all 155 tests pass)
 5. Run quality checks: `poetry run pre-commit run --all-files`
 6. Commit your changes: `git commit -m 'Add amazing feature'`
 7. Push to your branch: `git push origin feature/amazing-feature`
@@ -502,7 +521,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Status**: Production Ready
 - **MCP Protocol**: 2.0 Compatible
 - **TrueNAS Compatibility**: Electric Eel (24.10+) and Fangtooth (25.10+)
-- **Test Coverage**: 88% (110 tests passing)
+- **Test Coverage**: 84% (155 tests passing)
 - **Active Maintenance**: Yes
 
 ## Support
