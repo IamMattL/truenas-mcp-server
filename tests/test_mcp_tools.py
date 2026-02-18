@@ -23,25 +23,35 @@ class TestMCPToolsHandler:
 
     @pytest.mark.asyncio
     async def test_list_tools(self, tools_handler):
-        """Test tool listing returns all 10 tools."""
+        """Test tool listing returns all 20 tools."""
         tools = await tools_handler.list_tools()
 
-        assert len(tools) == 10
-        
+        assert len(tools) == 20
+
         tool_names = [tool.name for tool in tools]
         expected_tools = [
             "test_connection",
             "list_custom_apps",
-            "get_custom_app_status", 
+            "get_custom_app_status",
+            "get_custom_app_config",
             "start_custom_app",
             "stop_custom_app",
             "deploy_custom_app",
             "update_custom_app",
+            "update_custom_app_config",
             "delete_custom_app",
             "validate_compose",
             "get_app_logs",
+            "list_directory",
+            "list_datasets",
+            "list_snapshots",
+            "create_snapshot",
+            "delete_snapshot",
+            "get_system_info",
+            "get_storage_pools",
+            "get_network_info",
         ]
-        
+
         for expected_tool in expected_tools:
             assert expected_tool in tool_names
 
@@ -83,6 +93,73 @@ class TestMCPToolsHandler:
         assert result.type == "text"
         assert "nginx-demo" in result.text
         assert "RUNNING" in result.text
+
+    # ── Get/Update Config Tool Tests ────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_get_custom_app_config_running(self, tools_handler):
+        """Test getting config of a running app."""
+        result = await tools_handler.call_tool("get_custom_app_config", {"app_name": "nginx-demo"})
+
+        assert result.type == "text"
+        assert "nginx-demo" in result.text
+        assert "nginx:latest" in result.text
+        assert "8080:80" in result.text
+        assert "NGINX_HOST" in result.text
+        assert "/usr/share/nginx/html" in result.text
+
+    @pytest.mark.asyncio
+    async def test_get_custom_app_config_stopped(self, tools_handler):
+        """Test getting config of a stopped app."""
+        result = await tools_handler.call_tool("get_custom_app_config", {"app_name": "plex-server"})
+
+        assert result.type == "text"
+        assert "STOPPED" in result.text
+        assert "plexinc/pms-docker" in result.text
+        assert "PLEX_CLAIM" in result.text
+
+    @pytest.mark.asyncio
+    async def test_get_custom_app_config_nonexistent(self, tools_handler):
+        """Test getting config of a nonexistent app."""
+        result = await tools_handler.call_tool("get_custom_app_config", {"app_name": "nonexistent-app"})
+
+        assert result.type == "text"
+        assert "❌" in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_custom_app_config_success(self, tools_handler):
+        """Test updating app config successfully."""
+        result = await tools_handler.call_tool("update_custom_app_config", {
+            "app_name": "nginx-demo",
+            "config": {"config": {"services": {"web": {"environment": {"NGINX_HOST": "example.com"}}}}},
+        })
+
+        assert result.type == "text"
+        assert "✅" in result.text
+        assert "nginx-demo" in result.text
+        assert "config" in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_custom_app_config_nonexistent(self, tools_handler):
+        """Test updating config of a nonexistent app."""
+        result = await tools_handler.call_tool("update_custom_app_config", {
+            "app_name": "nonexistent-app",
+            "config": {"config": {"services": {}}},
+        })
+
+        assert result.type == "text"
+        assert "❌" in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_custom_app_config_env_only(self, tools_handler):
+        """Test updating just environment variables."""
+        result = await tools_handler.call_tool("update_custom_app_config", {
+            "app_name": "home-assistant",
+            "config": {"config": {"services": {"hass": {"environment": {"TZ": "US/Eastern"}}}}},
+        })
+
+        assert result.type == "text"
+        assert "✅" in result.text
 
     @pytest.mark.asyncio
     async def test_start_custom_app(self, tools_handler):
@@ -224,12 +301,184 @@ services:
         """Test error handling in tool execution."""
         # Mock the client to raise an exception
         tools_handler.client.get_app_status = AsyncMock(side_effect=Exception("Mock error"))
-        
+
         result = await tools_handler.call_tool("get_custom_app_status", {"app_name": "test"})
-        
+
         assert result.type == "text"
         assert "❌" in result.text
         assert "Error executing" in result.text
+
+    # ── Filesystem Tool Tests ─────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_list_directory_default(self, tools_handler):
+        """Test listing /mnt directory."""
+        result = await tools_handler.call_tool("list_directory", {})
+
+        assert result.type == "text"
+        assert "Directory: /mnt" in result.text
+        assert "Store" in result.text
+        assert "Boot" in result.text
+        # Hidden files should be excluded by default
+        assert ".zfs" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_list_directory_with_hidden(self, tools_handler):
+        """Test listing directory with hidden files included."""
+        result = await tools_handler.call_tool("list_directory", {
+            "path": "/mnt",
+            "include_hidden": True,
+        })
+
+        assert result.type == "text"
+        assert ".zfs" in result.text
+
+    @pytest.mark.asyncio
+    async def test_list_directory_subdirectory(self, tools_handler):
+        """Test listing a subdirectory."""
+        result = await tools_handler.call_tool("list_directory", {
+            "path": "/mnt/Store/Media",
+        })
+
+        assert result.type == "text"
+        assert "Movies" in result.text
+        assert "TV Shows" in result.text
+        assert "readme.txt" in result.text
+
+    @pytest.mark.asyncio
+    async def test_list_directory_path_restriction(self, tools_handler):
+        """Test that paths outside /mnt/ are rejected."""
+        result = await tools_handler.call_tool("list_directory", {
+            "path": "/etc/passwd",
+        })
+
+        assert result.type == "text"
+        assert "❌" in result.text
+
+    @pytest.mark.asyncio
+    async def test_list_directory_traversal_blocked(self, tools_handler):
+        """Test that path traversal attempts are blocked."""
+        result = await tools_handler.call_tool("list_directory", {
+            "path": "/mnt/../../etc",
+        })
+
+        assert result.type == "text"
+        assert "❌" in result.text
+
+    # ── ZFS Dataset / Snapshot Tool Tests ─────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_list_datasets_all(self, tools_handler):
+        """Test listing all datasets."""
+        result = await tools_handler.call_tool("list_datasets", {})
+
+        assert result.type == "text"
+        assert "ZFS Datasets" in result.text
+        assert "Store" in result.text
+        assert "Store/Media" in result.text
+
+    @pytest.mark.asyncio
+    async def test_list_datasets_filtered(self, tools_handler):
+        """Test listing datasets filtered by pool."""
+        result = await tools_handler.call_tool("list_datasets", {
+            "pool_name": "Boot",
+        })
+
+        assert result.type == "text"
+        assert "Boot/ROOT" in result.text
+        assert "Store/Media" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_list_snapshots_all(self, tools_handler):
+        """Test listing all snapshots."""
+        result = await tools_handler.call_tool("list_snapshots", {})
+
+        assert result.type == "text"
+        assert "ZFS Snapshots" in result.text
+        assert "pre-tdarr-20260215" in result.text
+        assert "daily-20260217" in result.text
+
+    @pytest.mark.asyncio
+    async def test_list_snapshots_filtered(self, tools_handler):
+        """Test listing snapshots filtered by dataset."""
+        result = await tools_handler.call_tool("list_snapshots", {
+            "dataset": "Store/Media",
+        })
+
+        assert result.type == "text"
+        assert "pre-tdarr-20260215" in result.text
+        assert "daily-20260217" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_create_snapshot(self, tools_handler):
+        """Test creating a snapshot."""
+        result = await tools_handler.call_tool("create_snapshot", {
+            "dataset": "Store/Media",
+            "name": "test-snap",
+        })
+
+        assert result.type == "text"
+        assert "✅" in result.text
+        assert "Store/Media@test-snap" in result.text
+
+    @pytest.mark.asyncio
+    async def test_delete_snapshot_confirmed(self, tools_handler):
+        """Test deleting a snapshot with confirmation."""
+        result = await tools_handler.call_tool("delete_snapshot", {
+            "snapshot_name": "Store/Media@pre-tdarr-20260215",
+            "confirm_deletion": True,
+        })
+
+        assert result.type == "text"
+        assert "✅" in result.text
+        assert "Deleted" in result.text
+
+    @pytest.mark.asyncio
+    async def test_delete_snapshot_not_confirmed(self, tools_handler):
+        """Test deleting a snapshot without confirmation."""
+        result = await tools_handler.call_tool("delete_snapshot", {
+            "snapshot_name": "Store/Media@pre-tdarr-20260215",
+            "confirm_deletion": False,
+        })
+
+        assert result.type == "text"
+        assert "❌" in result.text
+        assert "not confirmed" in result.text.lower()
+
+    # ── System / Pool / Network Tool Tests ────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_get_system_info(self, tools_handler):
+        """Test getting system information."""
+        result = await tools_handler.call_tool("get_system_info", {})
+
+        assert result.type == "text"
+        assert "TrueNAS System Info" in result.text
+        assert "truenas" in result.text  # hostname
+        assert "TrueNAS-SCALE" in result.text
+        assert "i7-7700" in result.text
+
+    @pytest.mark.asyncio
+    async def test_get_storage_pools(self, tools_handler):
+        """Test getting storage pool information."""
+        result = await tools_handler.call_tool("get_storage_pools", {})
+
+        assert result.type == "text"
+        assert "Storage Pools" in result.text
+        assert "Store" in result.text
+        assert "ONLINE" in result.text
+        assert "RAIDZ2" in result.text
+
+    @pytest.mark.asyncio
+    async def test_get_network_info(self, tools_handler):
+        """Test getting network interface information."""
+        result = await tools_handler.call_tool("get_network_info", {})
+
+        assert result.type == "text"
+        assert "Network Interfaces" in result.text
+        assert "enp2s0" in result.text
+        assert "192.168.10.249" in result.text
+        assert "2500 Mbps" in result.text
 
 
 class TestToolSchemas:
@@ -266,10 +515,12 @@ class TestToolSchemas:
         
         app_name_tools = [
             "get_custom_app_status",
-            "start_custom_app", 
+            "get_custom_app_config",
+            "start_custom_app",
             "stop_custom_app",
             "deploy_custom_app",
             "update_custom_app",
+            "update_custom_app_config",
             "delete_custom_app",
             "get_app_logs"
         ]

@@ -18,6 +18,159 @@ class MockTrueNASClient:
         self.authenticated = False
         
         # Mock data
+        # Filesystem mock data
+        self.mock_filesystem = {
+            "/mnt": [
+                {"name": "Store", "type": "DIRECTORY", "size": 0, "mode": 0o755},
+                {"name": "Boot", "type": "DIRECTORY", "size": 0, "mode": 0o755},
+                {"name": ".zfs", "type": "DIRECTORY", "size": 0, "mode": 0o755},
+            ],
+            "/mnt/Store": [
+                {"name": "Media", "type": "DIRECTORY", "size": 0, "mode": 0o755},
+                {"name": "Apps", "type": "DIRECTORY", "size": 0, "mode": 0o755},
+                {"name": "Backups", "type": "DIRECTORY", "size": 0, "mode": 0o755},
+                {"name": ".config", "type": "DIRECTORY", "size": 0, "mode": 0o755},
+            ],
+            "/mnt/Store/Media": [
+                {"name": "Movies", "type": "DIRECTORY", "size": 0, "mode": 0o755},
+                {"name": "TV Shows", "type": "DIRECTORY", "size": 0, "mode": 0o755},
+                {"name": "readme.txt", "type": "FILE", "size": 1024, "mode": 0o644},
+            ],
+        }
+
+        # ZFS dataset mock data
+        self.mock_datasets = [
+            {
+                "id": "Store",
+                "pool": "Store",
+                "name": "Store",
+                "type": "FILESYSTEM",
+                "used": {"rawvalue": "5497558138880"},
+                "available": {"rawvalue": "10995116277760"},
+                "mountpoint": "/mnt/Store",
+            },
+            {
+                "id": "Store/Media",
+                "pool": "Store",
+                "name": "Store/Media",
+                "type": "FILESYSTEM",
+                "used": {"rawvalue": "4398046511104"},
+                "available": {"rawvalue": "10995116277760"},
+                "mountpoint": "/mnt/Store/Media",
+            },
+            {
+                "id": "Store/Apps",
+                "pool": "Store",
+                "name": "Store/Apps",
+                "type": "FILESYSTEM",
+                "used": {"rawvalue": "536870912000"},
+                "available": {"rawvalue": "10995116277760"},
+                "mountpoint": "/mnt/Store/Apps",
+            },
+            {
+                "id": "Boot/ROOT",
+                "pool": "Boot",
+                "name": "Boot/ROOT",
+                "type": "FILESYSTEM",
+                "used": {"rawvalue": "21474836480"},
+                "available": {"rawvalue": "107374182400"},
+                "mountpoint": "/mnt/Boot/ROOT",
+            },
+        ]
+
+        # ZFS snapshot mock data
+        self.mock_snapshots = [
+            {
+                "name": "Store/Media@pre-tdarr-20260215",
+                "dataset": "Store/Media",
+                "properties": {
+                    "referenced": {"rawvalue": "4398046511104"},
+                    "used": {"rawvalue": "1073741824"},
+                    "creation": {"rawvalue": "1739577600"},
+                },
+            },
+            {
+                "name": "Store/Apps@daily-20260217",
+                "dataset": "Store/Apps",
+                "properties": {
+                    "referenced": {"rawvalue": "536870912000"},
+                    "used": {"rawvalue": "52428800"},
+                    "creation": {"rawvalue": "1739750400"},
+                },
+            },
+        ]
+
+        # System info mock data
+        self.mock_system_info = {
+            "hostname": "truenas",
+            "version": "TrueNAS-SCALE-24.10.2",
+            "uptime_seconds": 864000,
+            "cores": 4,
+            "physical_cores": 4,
+            "loadavg": [0.5, 0.7, 0.6],
+            "physmem": 17179869184,
+            "model": "Intel(R) Core(TM) i7-7700 CPU @ 3.60GHz",
+            "buildtime": {"$date": 1700000000000},
+        }
+
+        # Pool mock data
+        self.mock_pools = [
+            {
+                "name": "Store",
+                "status": "ONLINE",
+                "healthy": True,
+                "size": 17592186044416,
+                "allocated": 5497558138880,
+                "free": 12094627905536,
+                "scan": {
+                    "function": "SCRUB",
+                    "state": "FINISHED",
+                    "end_time": {"$date": 1739404800000},
+                    "errors": 0,
+                },
+                "topology": {
+                    "data": [{"type": "RAIDZ2", "status": "ONLINE"}],
+                },
+            },
+            {
+                "name": "Boot",
+                "status": "ONLINE",
+                "healthy": True,
+                "size": 128849018880,
+                "allocated": 21474836480,
+                "free": 107374182400,
+                "scan": {
+                    "function": "SCRUB",
+                    "state": "FINISHED",
+                    "end_time": {"$date": 1739404800000},
+                    "errors": 0,
+                },
+                "topology": {
+                    "data": [{"type": "MIRROR", "status": "ONLINE"}],
+                },
+            },
+        ]
+
+        # Network interface mock data
+        self.mock_interfaces = [
+            {
+                "name": "enp2s0",
+                "type": "PHYSICAL",
+                "state": {"link_state": "LINK_STATE_UP", "mtu": 1500, "speed": 2500},
+                "aliases": [
+                    {"type": "INET", "address": "192.168.10.249", "netmask": 24},
+                ],
+            },
+            {
+                "name": "lo",
+                "type": "LOOPBACK",
+                "state": {"link_state": "LINK_STATE_UP", "mtu": 65536, "speed": None},
+                "aliases": [
+                    {"type": "INET", "address": "127.0.0.1", "netmask": 8},
+                ],
+            },
+        ]
+
         self.mock_apps = {
             "nginx-demo": {
                 "name": "nginx-demo",
@@ -25,6 +178,20 @@ class MockTrueNASClient:
                 "containers": ["nginx-demo-web-1"],
                 "ports": ["8080:80"],
                 "created": "2025-07-30T10:00:00Z",
+                "version": "1.0.0",
+                "config": {
+                    "services": {
+                        "web": {
+                            "image": "nginx:latest",
+                            "network": {"host_network": False, "ports": [{"host": 8080, "container": 80, "protocol": "tcp"}]},
+                            "storage": [{"host_path": "/mnt/Store/Apps/nginx/html", "mount_path": "/usr/share/nginx/html", "read_only": True}],
+                            "environment": {"NGINX_HOST": "localhost", "NGINX_PORT": "80"},
+                            "restart_policy": "unless-stopped",
+                        }
+                    }
+                },
+                "active_workloads": {"containers": 1, "used_ports": [{"host": 8080, "container": 80}]},
+                "metadata": {"app_version": "1.0.0", "train": "custom"},
             },
             "plex-server": {
                 "name": "plex-server",
@@ -32,6 +199,23 @@ class MockTrueNASClient:
                 "containers": ["plex-server-plex-1"],
                 "ports": ["32400:32400"],
                 "created": "2025-07-29T15:30:00Z",
+                "version": "1.41.0",
+                "config": {
+                    "services": {
+                        "plex": {
+                            "image": "plexinc/pms-docker:1.41.0",
+                            "network": {"host_network": True, "ports": [{"host": 32400, "container": 32400, "protocol": "tcp"}]},
+                            "storage": [
+                                {"host_path": "/mnt/Store/Apps/plex/config", "mount_path": "/config", "read_only": False},
+                                {"host_path": "/mnt/Store/Media", "mount_path": "/media", "read_only": True},
+                            ],
+                            "environment": {"PLEX_CLAIM": "claim-xxxx", "TZ": "Europe/London"},
+                            "restart_policy": "unless-stopped",
+                        }
+                    }
+                },
+                "active_workloads": {"containers": 0, "used_ports": []},
+                "metadata": {"app_version": "1.41.0", "train": "custom"},
             },
             "home-assistant": {
                 "name": "home-assistant",
@@ -39,6 +223,20 @@ class MockTrueNASClient:
                 "containers": ["home-assistant-hass-1"],
                 "ports": ["8123:8123"],
                 "created": "2025-07-28T09:15:00Z",
+                "version": "2025.1.0",
+                "config": {
+                    "services": {
+                        "hass": {
+                            "image": "ghcr.io/home-assistant/home-assistant:2025.1",
+                            "network": {"host_network": False, "ports": [{"host": 8123, "container": 8123, "protocol": "tcp"}]},
+                            "storage": [{"host_path": "/mnt/Store/Apps/hass/config", "mount_path": "/config", "read_only": False}],
+                            "environment": {"TZ": "Europe/London"},
+                            "restart_policy": "unless-stopped",
+                        }
+                    }
+                },
+                "active_workloads": {"containers": 1, "used_ports": [{"host": 8123, "container": 8123}]},
+                "metadata": {"app_version": "2025.1.0", "train": "custom"},
             },
         }
 
@@ -83,6 +281,39 @@ class MockTrueNASClient:
             raise Exception(f"App '{app_name}' not found")
         
         return self.mock_apps[app_name]["state"]
+
+    async def get_app_config(self, app_name: str) -> Dict[str, Any]:
+        """Mock get full Custom App configuration."""
+        logger.info("Mock: Getting app config", app=app_name)
+        await asyncio.sleep(0.1)
+
+        if app_name not in self.mock_apps:
+            raise Exception(f"App '{app_name}' not found")
+
+        return dict(self.mock_apps[app_name])
+
+    async def update_app_config(self, app_name: str, config: Dict[str, Any]) -> bool:
+        """Mock update Custom App configuration with raw config dict."""
+        logger.info("Mock: Updating app config", app=app_name, keys=list(config.keys()))
+        await asyncio.sleep(0.3)
+
+        if app_name not in self.mock_apps:
+            return False
+
+        # Merge config into existing app data
+        for key, value in config.items():
+            if key == "config" and "config" in self.mock_apps[app_name]:
+                # Deep-merge the config.services level
+                existing = self.mock_apps[app_name]["config"]
+                for section, section_val in value.items():
+                    if section in existing and isinstance(existing[section], dict) and isinstance(section_val, dict):
+                        existing[section].update(section_val)
+                    else:
+                        existing[section] = section_val
+            else:
+                self.mock_apps[app_name][key] = value
+
+        return True
 
     async def start_app(self, app_name: str) -> bool:
         """Mock start Custom App."""
@@ -195,10 +426,10 @@ class MockTrueNASClient:
         """Mock get Custom App logs."""
         logger.info("Mock: Getting app logs", app=app_name, lines=lines, service=service_name)
         await asyncio.sleep(0.3)
-        
+
         if app_name not in self.mock_apps:
             return "App not found"
-        
+
         # Generate mock logs
         mock_logs = []
         for i in range(min(lines, 20)):  # Limit to 20 lines for mock
@@ -215,5 +446,110 @@ class MockTrueNASClient:
                 "Background task finished",
             ])
             mock_logs.append(f"[{timestamp}] {level}: {message}")
-        
+
         return "\n".join(mock_logs)
+
+    # ── Filesystem Tools ──────────────────────────────────────────────
+
+    async def list_directory(
+        self,
+        path: str = "/mnt",
+        include_hidden: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Mock list directory contents."""
+        import os
+        logger.info("Mock: Listing directory", path=path)
+        await asyncio.sleep(0.1)
+
+        normalized = os.path.normpath(path)
+        if not normalized.startswith("/mnt"):
+            raise ValueError("Path must be under /mnt/")
+
+        entries = self.mock_filesystem.get(normalized, [])
+        if not include_hidden:
+            entries = [e for e in entries if not e["name"].startswith(".")]
+        return entries
+
+    # ── ZFS Dataset / Snapshot Tools ──────────────────────────────────
+
+    async def list_datasets(
+        self,
+        pool_name: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Mock list ZFS datasets."""
+        logger.info("Mock: Listing datasets", pool=pool_name)
+        await asyncio.sleep(0.1)
+
+        if pool_name:
+            return [d for d in self.mock_datasets if d["pool"] == pool_name]
+        return list(self.mock_datasets)
+
+    async def list_snapshots(
+        self,
+        dataset: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Mock list ZFS snapshots."""
+        logger.info("Mock: Listing snapshots", dataset=dataset)
+        await asyncio.sleep(0.1)
+
+        if dataset:
+            return [s for s in self.mock_snapshots if s["dataset"] == dataset]
+        return list(self.mock_snapshots)
+
+    async def create_snapshot(
+        self,
+        dataset: str,
+        name: str,
+        recursive: bool = False,
+    ) -> Dict[str, Any]:
+        """Mock create ZFS snapshot."""
+        logger.info("Mock: Creating snapshot", dataset=dataset, name=name)
+        await asyncio.sleep(0.2)
+
+        if "/" not in dataset:
+            raise ValueError(
+                "Dataset must be in pool/dataset format (e.g. 'Store/Media')"
+            )
+
+        snapshot = {
+            "name": f"{dataset}@{name}",
+            "dataset": dataset,
+            "properties": {
+                "referenced": {"rawvalue": "0"},
+                "used": {"rawvalue": "0"},
+                "creation": {"rawvalue": "1739836800"},
+            },
+        }
+        self.mock_snapshots.append(snapshot)
+        return snapshot
+
+    async def delete_snapshot(self, snapshot_name: str) -> bool:
+        """Mock delete ZFS snapshot."""
+        logger.info("Mock: Deleting snapshot", snapshot=snapshot_name)
+        await asyncio.sleep(0.2)
+
+        for i, snap in enumerate(self.mock_snapshots):
+            if snap["name"] == snapshot_name:
+                self.mock_snapshots.pop(i)
+                return True
+        return False
+
+    # ── System / Pool / Network Info ──────────────────────────────────
+
+    async def get_system_info(self) -> Dict[str, Any]:
+        """Mock get system information."""
+        logger.info("Mock: Getting system info")
+        await asyncio.sleep(0.1)
+        return dict(self.mock_system_info)
+
+    async def get_storage_pools(self) -> List[Dict[str, Any]]:
+        """Mock get storage pools."""
+        logger.info("Mock: Getting storage pools")
+        await asyncio.sleep(0.1)
+        return list(self.mock_pools)
+
+    async def get_network_info(self) -> List[Dict[str, Any]]:
+        """Mock get network interfaces."""
+        logger.info("Mock: Getting network info")
+        await asyncio.sleep(0.1)
+        return list(self.mock_interfaces)

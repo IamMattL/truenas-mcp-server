@@ -2,6 +2,7 @@
 
 import asyncio
 import functools
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import structlog
@@ -186,6 +187,20 @@ class TrueNASClient:
         app_data = await self._call("app.get_instance", app_name)
         return app_data.get("state", "unknown")
 
+    async def get_app_config(self, app_name: str) -> Dict[str, Any]:
+        """Get full Custom App configuration."""
+        return await self._call("app.get_instance", app_name)
+
+    async def update_app_config(self, app_name: str, config: Dict[str, Any]) -> bool:
+        """Update Custom App configuration with a raw config dict."""
+        try:
+            # Verify app exists first (app.update silently accepts nonexistent apps)
+            await self._call("app.get_instance", app_name)
+            await self._call("app.update", app_name, config)
+            return True
+        except TrueNASAPIError:
+            return False
+
     async def start_app(self, app_name: str) -> bool:
         """Start Custom App."""
         try:
@@ -282,3 +297,88 @@ class TrueNASClient:
             f"Logs for {app_name} (container {container_id}):\n"
             "[Log retrieval not fully implemented in TrueNAS API]"
         )
+
+    # ── Filesystem Tools ──────────────────────────────────────────────
+
+    async def list_directory(
+        self,
+        path: str = "/mnt",
+        include_hidden: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """List directory contents, restricted to /mnt/."""
+        normalized = os.path.normpath(path)
+        if not normalized.startswith("/mnt"):
+            raise ValueError("Path must be under /mnt/")
+
+        entries = await self._call("filesystem.listdir", normalized)
+
+        if not include_hidden:
+            entries = [e for e in entries if not e.get("name", "").startswith(".")]
+
+        return entries
+
+    # ── ZFS Dataset / Snapshot Tools ──────────────────────────────────
+
+    async def list_datasets(
+        self,
+        pool_name: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List ZFS datasets, optionally filtered by pool."""
+        if pool_name:
+            return await self._call(
+                "pool.dataset.query",
+                [["pool", "=", pool_name]],
+            )
+        return await self._call("pool.dataset.query")
+
+    async def list_snapshots(
+        self,
+        dataset: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List ZFS snapshots, optionally filtered by dataset."""
+        if dataset:
+            return await self._call(
+                "zfs.snapshot.query",
+                [["dataset", "=", dataset]],
+            )
+        return await self._call("zfs.snapshot.query")
+
+    async def create_snapshot(
+        self,
+        dataset: str,
+        name: str,
+        recursive: bool = False,
+    ) -> Dict[str, Any]:
+        """Create a ZFS snapshot."""
+        if "/" not in dataset:
+            raise ValueError(
+                "Dataset must be in pool/dataset format (e.g. 'Store/Media')"
+            )
+
+        return await self._call("zfs.snapshot.create", {
+            "dataset": dataset,
+            "name": name,
+            "recursive": recursive,
+        })
+
+    async def delete_snapshot(self, snapshot_name: str) -> bool:
+        """Delete a ZFS snapshot by full name (e.g. 'Store/Media@snap1')."""
+        try:
+            await self._call("zfs.snapshot.delete", snapshot_name)
+            return True
+        except TrueNASAPIError:
+            return False
+
+    # ── System / Pool / Network Info ──────────────────────────────────
+
+    async def get_system_info(self) -> Dict[str, Any]:
+        """Get TrueNAS system information."""
+        return await self._call("system.info")
+
+    async def get_storage_pools(self) -> List[Dict[str, Any]]:
+        """Get storage pool information."""
+        return await self._call("pool.query")
+
+    async def get_network_info(self) -> List[Dict[str, Any]]:
+        """Get network interface information."""
+        return await self._call("interface.query")

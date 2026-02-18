@@ -186,6 +186,176 @@ services:
         logs = await mock_client.get_app_logs("nonexistent-app", lines=50)
         assert logs == "App not found"
 
+    # ── Get/Update Config Tests ────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_get_app_config_existing(self, mock_client):
+        """Test getting full config of existing app."""
+        config = await mock_client.get_app_config("nginx-demo")
+        assert config["name"] == "nginx-demo"
+        assert config["state"] == "RUNNING"
+        assert "config" in config
+        assert "services" in config["config"]
+        assert "web" in config["config"]["services"]
+        assert config["config"]["services"]["web"]["image"] == "nginx:latest"
+
+    @pytest.mark.asyncio
+    async def test_get_app_config_nonexistent(self, mock_client):
+        """Test getting config of nonexistent app raises exception."""
+        with pytest.raises(Exception, match="not found"):
+            await mock_client.get_app_config("nonexistent-app")
+
+    @pytest.mark.asyncio
+    async def test_get_app_config_has_metadata(self, mock_client):
+        """Test that config includes metadata and workloads."""
+        config = await mock_client.get_app_config("plex-server")
+        assert "metadata" in config
+        assert "active_workloads" in config
+        assert config["metadata"]["train"] == "custom"
+
+    @pytest.mark.asyncio
+    async def test_update_app_config_existing(self, mock_client):
+        """Test updating config of existing app."""
+        result = await mock_client.update_app_config("nginx-demo", {
+            "config": {"services": {"web": {"environment": {"NGINX_HOST": "new-host"}}}}
+        })
+        assert result is True
+        # Verify the change was applied
+        config = await mock_client.get_app_config("nginx-demo")
+        assert config["config"]["services"]["web"]["environment"]["NGINX_HOST"] == "new-host"
+
+    @pytest.mark.asyncio
+    async def test_update_app_config_nonexistent(self, mock_client):
+        """Test updating config of nonexistent app."""
+        result = await mock_client.update_app_config("nonexistent-app", {"config": {}})
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_update_app_config_top_level_field(self, mock_client):
+        """Test updating a top-level field like version."""
+        result = await mock_client.update_app_config("nginx-demo", {"version": "2.0.0"})
+        assert result is True
+        config = await mock_client.get_app_config("nginx-demo")
+        assert config["version"] == "2.0.0"
+
+    # ── Filesystem Tests ──────────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_list_directory_default(self, mock_client):
+        """Test listing /mnt directory."""
+        entries = await mock_client.list_directory("/mnt")
+        names = [e["name"] for e in entries]
+        assert "Store" in names
+        assert "Boot" in names
+        # Hidden entries excluded by default
+        assert ".zfs" not in names
+
+    @pytest.mark.asyncio
+    async def test_list_directory_with_hidden(self, mock_client):
+        """Test listing directory with hidden files."""
+        entries = await mock_client.list_directory("/mnt", include_hidden=True)
+        names = [e["name"] for e in entries]
+        assert ".zfs" in names
+
+    @pytest.mark.asyncio
+    async def test_list_directory_path_restriction(self, mock_client):
+        """Test that paths outside /mnt/ are rejected."""
+        with pytest.raises(ValueError, match="must be under /mnt/"):
+            await mock_client.list_directory("/etc")
+
+    @pytest.mark.asyncio
+    async def test_list_directory_traversal(self, mock_client):
+        """Test that path traversal is blocked."""
+        with pytest.raises(ValueError, match="must be under /mnt/"):
+            await mock_client.list_directory("/mnt/../../etc")
+
+    # ── ZFS Dataset / Snapshot Tests ──────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_list_datasets_all(self, mock_client):
+        """Test listing all datasets."""
+        datasets = await mock_client.list_datasets()
+        assert len(datasets) == 4
+        names = [d["name"] for d in datasets]
+        assert "Store" in names
+        assert "Store/Media" in names
+
+    @pytest.mark.asyncio
+    async def test_list_datasets_filtered(self, mock_client):
+        """Test listing datasets filtered by pool."""
+        datasets = await mock_client.list_datasets(pool_name="Boot")
+        assert len(datasets) == 1
+        assert datasets[0]["name"] == "Boot/ROOT"
+
+    @pytest.mark.asyncio
+    async def test_list_snapshots_all(self, mock_client):
+        """Test listing all snapshots."""
+        snapshots = await mock_client.list_snapshots()
+        assert len(snapshots) == 2
+
+    @pytest.mark.asyncio
+    async def test_list_snapshots_filtered(self, mock_client):
+        """Test listing snapshots filtered by dataset."""
+        snapshots = await mock_client.list_snapshots(dataset="Store/Media")
+        assert len(snapshots) == 1
+        assert "pre-tdarr" in snapshots[0]["name"]
+
+    @pytest.mark.asyncio
+    async def test_create_snapshot(self, mock_client):
+        """Test creating a snapshot."""
+        result = await mock_client.create_snapshot("Store/Media", "test-snap")
+        assert result["name"] == "Store/Media@test-snap"
+        # Verify it was added
+        snapshots = await mock_client.list_snapshots()
+        assert len(snapshots) == 3
+
+    @pytest.mark.asyncio
+    async def test_create_snapshot_invalid_dataset(self, mock_client):
+        """Test creating snapshot with invalid dataset format."""
+        with pytest.raises(ValueError, match="pool/dataset format"):
+            await mock_client.create_snapshot("InvalidName", "snap1")
+
+    @pytest.mark.asyncio
+    async def test_delete_snapshot_existing(self, mock_client):
+        """Test deleting an existing snapshot."""
+        result = await mock_client.delete_snapshot("Store/Media@pre-tdarr-20260215")
+        assert result is True
+        snapshots = await mock_client.list_snapshots()
+        assert len(snapshots) == 1
+
+    @pytest.mark.asyncio
+    async def test_delete_snapshot_nonexistent(self, mock_client):
+        """Test deleting a nonexistent snapshot."""
+        result = await mock_client.delete_snapshot("Store/Media@doesnotexist")
+        assert result is False
+
+    # ── System / Pool / Network Tests ─────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_get_system_info(self, mock_client):
+        """Test getting system information."""
+        info = await mock_client.get_system_info()
+        assert info["hostname"] == "truenas"
+        assert "TrueNAS-SCALE" in info["version"]
+        assert info["cores"] == 4
+
+    @pytest.mark.asyncio
+    async def test_get_storage_pools(self, mock_client):
+        """Test getting storage pools."""
+        pools = await mock_client.get_storage_pools()
+        assert len(pools) == 2
+        names = [p["name"] for p in pools]
+        assert "Store" in names
+        assert "Boot" in names
+
+    @pytest.mark.asyncio
+    async def test_get_network_info(self, mock_client):
+        """Test getting network interfaces."""
+        interfaces = await mock_client.get_network_info()
+        assert len(interfaces) == 2
+        names = [i["name"] for i in interfaces]
+        assert "enp2s0" in names
+
 
 class TestTrueNASClient:
     """Test real TrueNAS client functionality."""
@@ -474,3 +644,45 @@ class TestTrueNASClient:
 
         result = await truenas_client.delete_app("app1", delete_volumes=True)
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_get_app_config(self, truenas_client):
+        """Test getting full app config."""
+        mock_tn_client = MagicMock()
+        mock_tn_client.call.return_value = {
+            "name": "app1",
+            "state": "RUNNING",
+            "config": {"services": {"web": {"image": "nginx:latest"}}},
+        }
+        truenas_client._client = mock_tn_client
+
+        result = await truenas_client.get_app_config("app1")
+        assert result["name"] == "app1"
+        assert result["config"]["services"]["web"]["image"] == "nginx:latest"
+        mock_tn_client.call.assert_called_once_with("app.get_instance", "app1")
+
+    @pytest.mark.asyncio
+    async def test_update_app_config_success(self, truenas_client):
+        """Test updating app config successfully."""
+        mock_tn_client = MagicMock()
+        mock_tn_client.call.return_value = None
+        truenas_client._client = mock_tn_client
+
+        config = {"config": {"services": {"web": {"environment": {"KEY": "val"}}}}}
+        result = await truenas_client.update_app_config("app1", config)
+        assert result is True
+        # Existence check + actual update = 2 calls
+        assert mock_tn_client.call.call_count == 2
+        mock_tn_client.call.assert_any_call("app.get_instance", "app1")
+        mock_tn_client.call.assert_any_call("app.update", "app1", config)
+
+    @pytest.mark.asyncio
+    async def test_update_app_config_failure(self, truenas_client):
+        """Test updating app config with API error."""
+        from truenas_api_client import ClientException
+        mock_tn_client = MagicMock()
+        mock_tn_client.call.side_effect = ClientException("App not found")
+        truenas_client._client = mock_tn_client
+
+        result = await truenas_client.update_app_config("nonexistent", {"config": {}})
+        assert result is False

@@ -163,7 +163,7 @@ class TestTrueNASMCPServer:
 
         # List tools should work
         tools = await server.tools_handler.list_tools()
-        assert len(tools) == 10
+        assert len(tools) == 20
 
         # Call a tool should work
         result = await server.tools_handler.call_tool("test_connection", {})
