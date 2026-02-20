@@ -289,8 +289,6 @@ class TrueNASClient:
         lines, then unsubscribes.  Only works for RUNNING / CRASHED / DEPLOYING
         apps (TrueNAS refuses to stream logs from stopped containers).
         """
-        import threading
-
         # Step 1 – get app state and container details
         app_data = await self._call("app.get_instance", app_name)
         state = app_data.get("state", "UNKNOWN")
@@ -351,66 +349,45 @@ class TrueNASClient:
         tail_lines: int = 100,
         timeout: int = 5,
     ) -> str:
-        """Subscribe to ``app.container_log_follow`` and collect log lines.
+        """Collect container logs via event-source subscription.
 
-        Uses ``core.subscribe`` with event-source args, registers a callback
-        in the underlying ``truenas_api_client`` event system, waits for
-        *tail_lines* events (or *timeout* seconds), then unsubscribes.
+        TrueNAS event sources encode args in the event name using a colon
+        delimiter: ``event_name:json_args_string``.  The middleware's
+        ``EventSourceManager.short_name_arg()`` splits on ``:`` to extract
+        the JSON arg which is then validated by ``EventSource.validate_arg()``.
+
+        This works with both JSONRPC and legacy WebSocket protocols.
         """
+        import json as _json
         import threading
 
         collected: List[str] = []
         done = threading.Event()
 
-        def _on_log(msg_type, *, fields=None, **kwargs):
-            if fields:
-                data = fields.get("data", "")
-                if data:
-                    ts = fields.get("timestamp", "")
-                    line = f"[{ts}] {data}" if ts else data
-                    collected.append(line.rstrip())
+        def _on_log(msg_type, **kwargs):
+            fields = kwargs.get("fields") or {}
+            data = fields.get("data", "")
+            if data:
+                ts = fields.get("timestamp", "")
+                line = f"[{ts}] {data}" if ts else data
+                collected.append(line.rstrip())
             if len(collected) >= tail_lines:
                 done.set()
 
-        def _subscribe_and_collect():
-            event_obj = threading.Event()
-            payload = {
-                "callback": _on_log,
-                "sync": False,
-                "event": event_obj,
-            }
-            # Register callback directly in the client's event dispatch map
-            self._client._event_callbacks[
-                "app.container_log_follow"
-            ].append(payload)
+        # Encode event source args in the event name (colon-delimited JSON)
+        args_json = _json.dumps({
+            "app_name": app_name,
+            "container_id": container_id,
+            "tail_lines": tail_lines,
+        })
+        event_name = f"app.container_log_follow:{args_json}"
 
-            sub_id = None
+        def _subscribe_and_collect():
+            sub_id = self._client.subscribe(event_name, _on_log)
             try:
-                # core.subscribe accepts (name, args) – the args dict is
-                # forwarded to the event-source constructor
-                sub_id = self._client.call(
-                    "core.subscribe",
-                    "app.container_log_follow",
-                    {
-                        "app_name": app_name,
-                        "container_id": container_id,
-                        "tail_lines": tail_lines,
-                    },
-                    timeout=10,
-                )
-                payload["id"] = sub_id
                 done.wait(timeout=timeout)
             finally:
-                if sub_id:
-                    try:
-                        self._client.call("core.unsubscribe", sub_id)
-                    except Exception:
-                        pass
-                cbs = self._client._event_callbacks.get(
-                    "app.container_log_follow", []
-                )
-                if payload in cbs:
-                    cbs.remove(payload)
+                self._client.unsubscribe(sub_id)
 
         await self._run_sync(_subscribe_and_collect)
         return "\n".join(collected)
