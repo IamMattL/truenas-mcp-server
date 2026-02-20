@@ -428,7 +428,16 @@ class MockTrueNASClient:
         await asyncio.sleep(0.3)
 
         if app_name not in self.mock_apps:
-            return "App not found"
+            raise Exception(f"App '{app_name}' not found")
+
+        app = self.mock_apps[app_name]
+        state = app.get("state", "UNKNOWN")
+
+        if state not in ("RUNNING", "CRASHED", "DEPLOYING"):
+            return (
+                f"Cannot retrieve logs: app '{app_name}' is {state}. "
+                "Start the app first."
+            )
 
         # Generate mock logs
         mock_logs = []
@@ -448,6 +457,28 @@ class MockTrueNASClient:
             mock_logs.append(f"[{timestamp}] {level}: {message}")
 
         return "\n".join(mock_logs)
+
+    # ── Docker Compose Config ────────────────────────────────────────
+
+    async def get_compose_config(self, app_name: str) -> Dict[str, Any]:
+        """Mock get Docker Compose config."""
+        logger.info("Mock: Getting compose config", app=app_name)
+        await asyncio.sleep(0.1)
+
+        if app_name not in self.mock_apps:
+            raise Exception(f"App '{app_name}' not found")
+
+        return dict(self.mock_apps[app_name].get("config", {}))
+
+    async def update_compose_config(self, app_name: str, compose_yaml: str) -> bool:
+        """Mock update Docker Compose config."""
+        logger.info("Mock: Updating compose config", app=app_name)
+        await asyncio.sleep(0.3)
+
+        if app_name not in self.mock_apps:
+            return False
+
+        return True
 
     # ── Filesystem Tools ──────────────────────────────────────────────
 

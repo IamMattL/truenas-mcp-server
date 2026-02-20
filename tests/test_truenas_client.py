@@ -182,9 +182,16 @@ services:
 
     @pytest.mark.asyncio
     async def test_get_app_logs_nonexistent(self, mock_client):
-        """Test getting logs from nonexistent app."""
-        logs = await mock_client.get_app_logs("nonexistent-app", lines=50)
-        assert logs == "App not found"
+        """Test getting logs from nonexistent app raises exception."""
+        with pytest.raises(Exception, match="not found"):
+            await mock_client.get_app_logs("nonexistent-app", lines=50)
+
+    @pytest.mark.asyncio
+    async def test_get_app_logs_stopped(self, mock_client):
+        """Test getting logs from a stopped app returns helpful message."""
+        logs = await mock_client.get_app_logs("plex-server", lines=50)
+        assert "Cannot retrieve logs" in logs
+        assert "STOPPED" in logs
 
     # ── Get/Update Config Tests ────────────────────────────────────────
 
@@ -237,6 +244,40 @@ services:
         assert result is True
         config = await mock_client.get_app_config("nginx-demo")
         assert config["version"] == "2.0.0"
+
+    # ── Docker Compose Config Tests ──────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_get_compose_config_existing(self, mock_client):
+        """Test getting compose config of existing app."""
+        config = await mock_client.get_compose_config("nginx-demo")
+        assert "services" in config
+        assert "web" in config["services"]
+        assert config["services"]["web"]["image"] == "nginx:latest"
+
+    @pytest.mark.asyncio
+    async def test_get_compose_config_nonexistent(self, mock_client):
+        """Test getting compose config of nonexistent app raises exception."""
+        with pytest.raises(Exception, match="not found"):
+            await mock_client.get_compose_config("nonexistent-app")
+
+    @pytest.mark.asyncio
+    async def test_update_compose_config_existing(self, mock_client):
+        """Test updating compose config of existing app."""
+        result = await mock_client.update_compose_config(
+            "nginx-demo",
+            "services:\n  web:\n    image: nginx:1.27\n",
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_update_compose_config_nonexistent(self, mock_client):
+        """Test updating compose config of nonexistent app."""
+        result = await mock_client.update_compose_config(
+            "nonexistent-app",
+            "services:\n  web:\n    image: nginx\n",
+        )
+        assert result is False
 
     # ── Filesystem Tests ──────────────────────────────────────────────
 

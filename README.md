@@ -8,13 +8,13 @@ This MCP server wraps the official `truenas_api_client` (synchronous, websocket-
 
 ## Features
 
-- **20 MCP Tools** for complete app lifecycle, filesystem, ZFS, and system management
+- **22 MCP Tools** for complete app lifecycle, filesystem, ZFS, and system management
 - **Docker Compose Conversion** to TrueNAS Custom App format with multi-service support
 - **Password-based Authentication** (recommended) with API key fallback
 - **Security Validation** preventing privileged containers and dangerous mounts
 - **Lazy Client Initialization** - TrueNAS connection on first tool call, not server startup
 - **Mock Development Mode** for testing without TrueNAS access
-- **Comprehensive Test Suite** - 155 tests passing, 84% coverage
+- **Comprehensive Test Suite** - 165 tests passing, 80% coverage
 - **Thread-safe Async Wrapper** around synchronous TrueNAS API client
 
 ## Compatibility
@@ -236,7 +236,11 @@ The server provides 20 MCP tools across five categories:
 
 ### Validation and Monitoring
 - **`validate_compose`** - Validate Docker Compose YAML for TrueNAS compatibility
-- **`get_app_logs`** - Retrieve app logs with configurable line limit and service filter
+- **`get_app_logs`** - Retrieve real container logs via WebSocket subscription (running apps only)
+
+### Docker Compose Config
+- **`get_compose_config`** - Get the stored Docker Compose YAML for a Custom App
+- **`update_compose_config`** - Replace the Docker Compose YAML for a Custom App
 
 ### Filesystem
 - **`list_directory`** - Browse filesystem contents on TrueNAS (restricted to /mnt/)
@@ -361,10 +365,10 @@ The server enforces security constraints to prevent dangerous configurations:
 ### Running Tests
 
 ```bash
-# Run all tests (155 tests)
+# Run all tests (165 tests)
 poetry run pytest
 
-# Run with coverage report (84% coverage)
+# Run with coverage report (80% coverage)
 poetry run pytest --cov=src/truenas_mcp --cov-report=html
 
 # Run specific test categories
@@ -506,7 +510,7 @@ Contributions are welcome! Please follow these steps:
 1. Fork the repository at [https://github.com/IamMattL/truenas-mcp-server](https://github.com/IamMattL/truenas-mcp-server)
 2. Create a feature branch: `git checkout -b feature/amazing-feature`
 3. Make your changes with clear, descriptive commits
-4. Run tests: `poetry run pytest` (ensure all 155 tests pass)
+4. Run tests: `poetry run pytest` (ensure all 165 tests pass)
 5. Run quality checks: `poetry run pre-commit run --all-files`
 6. Commit your changes: `git commit -m 'Add amazing feature'`
 7. Push to your branch: `git push origin feature/amazing-feature`
@@ -521,7 +525,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Status**: Production Ready
 - **MCP Protocol**: 2.0 Compatible
 - **TrueNAS Compatibility**: Electric Eel (24.10+) and Fangtooth (25.10+)
-- **Test Coverage**: 84% (155 tests passing)
+- **Test Coverage**: 84% (165 tests passing)
 - **Active Maintenance**: Yes
 
 ## Support

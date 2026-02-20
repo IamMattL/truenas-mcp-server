@@ -292,6 +292,51 @@ class MCPToolsHandler:
                 },
             ),
 
+            # ── Docker Compose Config Tools ───────────────────────────
+            Tool(
+                name="get_compose_config",
+                description="Get the stored Docker Compose YAML for a Custom App (services, volumes, networks)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "app_name": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+                            "minLength": 2,
+                            "maxLength": 50,
+                            "description": "Name of the Custom App",
+                        }
+                    },
+                    "required": ["app_name"],
+                    "additionalProperties": False,
+                },
+            ),
+
+            Tool(
+                name="update_compose_config",
+                description="Update the Docker Compose YAML for a Custom App (replaces the entire compose config)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "app_name": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+                            "minLength": 2,
+                            "maxLength": 50,
+                            "description": "Name of the Custom App to update",
+                        },
+                        "compose_yaml": {
+                            "type": "string",
+                            "minLength": 10,
+                            "maxLength": 100000,
+                            "description": "New Docker Compose YAML content",
+                        },
+                    },
+                    "required": ["app_name", "compose_yaml"],
+                    "additionalProperties": False,
+                },
+            ),
+
             # ── Filesystem Tools ──────────────────────────────────────
             Tool(
                 name="list_directory",
@@ -489,6 +534,16 @@ class MCPToolsHandler:
                     app_name=arguments["app_name"],
                     lines=arguments.get("lines", 100),
                     service_name=arguments.get("service_name"),
+                )
+
+            # Docker Compose Config Tools
+            elif name == "get_compose_config":
+                return await self._get_compose_config(arguments["app_name"])
+
+            elif name == "update_compose_config":
+                return await self._update_compose_config(
+                    app_name=arguments["app_name"],
+                    compose_yaml=arguments["compose_yaml"],
                 )
 
             # Filesystem Tools
@@ -869,6 +924,44 @@ class MCPToolsHandler:
             return TextContent(
                 type="text",
                 text=f"No logs found for '{app_name}'"
+            )
+
+    # ── Docker Compose Config Handlers ───────────────────────────────
+
+    async def _get_compose_config(self, app_name: str) -> TextContent:
+        """Get the stored Docker Compose config as YAML."""
+        import yaml
+
+        config = await self.client.get_compose_config(app_name)
+
+        if not config:
+            return TextContent(
+                type="text",
+                text=f"No compose config found for '{app_name}'",
+            )
+
+        yaml_str = yaml.dump(config, default_flow_style=False, sort_keys=False)
+        return TextContent(
+            type="text",
+            text=f"Docker Compose config for '{app_name}':\n\n```yaml\n{yaml_str}```",
+        )
+
+    async def _update_compose_config(
+        self,
+        app_name: str,
+        compose_yaml: str,
+    ) -> TextContent:
+        """Update the Docker Compose config from a YAML string."""
+        success = await self.client.update_compose_config(app_name, compose_yaml)
+        if success:
+            return TextContent(
+                type="text",
+                text=f"✅ Updated Docker Compose config for '{app_name}'",
+            )
+        else:
+            return TextContent(
+                type="text",
+                text=f"❌ Failed to update Docker Compose config for '{app_name}'",
             )
 
     # ── Filesystem Handler ────────────────────────────────────────────

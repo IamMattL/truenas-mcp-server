@@ -283,20 +283,165 @@ class TrueNASClient:
         lines: int = 100,
         service_name: Optional[str] = None,
     ) -> str:
-        """Get Custom App logs."""
-        try:
-            container_ids = await self._call("app.container_ids", app_name)
-        except TrueNASAPIError as e:
-            raise TrueNASAPIError(f"Failed to get container IDs: {e}")
+        """Get Custom App logs via event source subscription.
 
-        if not container_ids:
-            return "No containers found for this app"
+        Subscribes to ``app.container_log_follow`` to collect historical log
+        lines, then unsubscribes.  Only works for RUNNING / CRASHED / DEPLOYING
+        apps (TrueNAS refuses to stream logs from stopped containers).
+        """
+        import threading
 
-        container_id = container_ids[0]
+        # Step 1 – get app state and container details
+        app_data = await self._call("app.get_instance", app_name)
+        state = app_data.get("state", "UNKNOWN")
+
+        if state not in ("RUNNING", "CRASHED", "DEPLOYING"):
+            return (
+                f"Cannot retrieve logs: app '{app_name}' is {state}. "
+                "Start the app first."
+            )
+
+        workloads = app_data.get("active_workloads") or {}
+        container_details = workloads.get("container_details") or []
+
+        if not container_details:
+            return f"No containers found for app '{app_name}'"
+
+        # Optionally filter by service name
+        if service_name:
+            containers = [
+                c for c in container_details
+                if c.get("service_name") == service_name
+            ]
+            if not containers:
+                available = ", ".join(
+                    c.get("service_name", "?") for c in container_details
+                )
+                return (
+                    f"Service '{service_name}' not found. "
+                    f"Available: {available}"
+                )
+        else:
+            containers = container_details
+
+        # Step 2 – collect logs from each container
+        all_logs: List[str] = []
+        for ctr in containers:
+            cid = ctr.get("id")
+            svc = ctr.get("service_name", "?")
+            if not cid:
+                continue
+
+            logs = await self._collect_container_logs(app_name, cid, lines)
+            if logs:
+                if len(containers) > 1:
+                    all_logs.append(f"=== {svc} ===")
+                all_logs.append(logs)
+
         return (
-            f"Logs for {app_name} (container {container_id}):\n"
-            "[Log retrieval not fully implemented in TrueNAS API]"
+            "\n".join(all_logs)
+            if all_logs
+            else f"No log data for app '{app_name}'"
         )
+
+    async def _collect_container_logs(
+        self,
+        app_name: str,
+        container_id: str,
+        tail_lines: int = 100,
+        timeout: int = 5,
+    ) -> str:
+        """Subscribe to ``app.container_log_follow`` and collect log lines.
+
+        Uses ``core.subscribe`` with event-source args, registers a callback
+        in the underlying ``truenas_api_client`` event system, waits for
+        *tail_lines* events (or *timeout* seconds), then unsubscribes.
+        """
+        import threading
+
+        collected: List[str] = []
+        done = threading.Event()
+
+        def _on_log(msg_type, *, fields=None, **kwargs):
+            if fields:
+                data = fields.get("data", "")
+                if data:
+                    ts = fields.get("timestamp", "")
+                    line = f"[{ts}] {data}" if ts else data
+                    collected.append(line.rstrip())
+            if len(collected) >= tail_lines:
+                done.set()
+
+        def _subscribe_and_collect():
+            event_obj = threading.Event()
+            payload = {
+                "callback": _on_log,
+                "sync": False,
+                "event": event_obj,
+            }
+            # Register callback directly in the client's event dispatch map
+            self._client._event_callbacks[
+                "app.container_log_follow"
+            ].append(payload)
+
+            sub_id = None
+            try:
+                # core.subscribe accepts (name, args) – the args dict is
+                # forwarded to the event-source constructor
+                sub_id = self._client.call(
+                    "core.subscribe",
+                    "app.container_log_follow",
+                    {
+                        "app_name": app_name,
+                        "container_id": container_id,
+                        "tail_lines": tail_lines,
+                    },
+                    timeout=10,
+                )
+                payload["id"] = sub_id
+                done.wait(timeout=timeout)
+            finally:
+                if sub_id:
+                    try:
+                        self._client.call("core.unsubscribe", sub_id)
+                    except Exception:
+                        pass
+                cbs = self._client._event_callbacks.get(
+                    "app.container_log_follow", []
+                )
+                if payload in cbs:
+                    cbs.remove(payload)
+
+        await self._run_sync(_subscribe_and_collect)
+        return "\n".join(collected)
+
+    # ── Docker Compose Config ────────────────────────────────────────
+
+    async def get_compose_config(self, app_name: str) -> Dict[str, Any]:
+        """Get the stored Docker Compose config for a Custom App.
+
+        Calls ``app.config`` which returns the parsed ``user_config.yaml``
+        — for custom apps this is the Docker Compose structure.
+        """
+        return await self._call("app.config", app_name)
+
+    async def update_compose_config(
+        self, app_name: str, compose_yaml: str
+    ) -> bool:
+        """Update the Docker Compose config for a Custom App.
+
+        Passes the raw YAML string via ``custom_compose_config_string``
+        which TrueNAS writes to both ``user_config.yaml`` and the
+        rendered ``docker-compose.yaml``.
+        """
+        try:
+            await self._call("app.get_instance", app_name)
+            await self._call("app.update", app_name, {
+                "custom_compose_config_string": compose_yaml,
+            })
+            return True
+        except TrueNASAPIError:
+            return False
 
     # ── Filesystem Tools ──────────────────────────────────────────────
 

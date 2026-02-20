@@ -23,10 +23,10 @@ class TestMCPToolsHandler:
 
     @pytest.mark.asyncio
     async def test_list_tools(self, tools_handler):
-        """Test tool listing returns all 20 tools."""
+        """Test tool listing returns all 22 tools."""
         tools = await tools_handler.list_tools()
 
-        assert len(tools) == 20
+        assert len(tools) == 22
 
         tool_names = [tool.name for tool in tools]
         expected_tools = [
@@ -42,6 +42,8 @@ class TestMCPToolsHandler:
             "delete_custom_app",
             "validate_compose",
             "get_app_logs",
+            "get_compose_config",
+            "update_compose_config",
             "list_directory",
             "list_datasets",
             "list_snapshots",
@@ -277,15 +279,82 @@ services:
 
     @pytest.mark.asyncio
     async def test_get_app_logs(self, tools_handler):
-        """Test getting Custom App logs."""
+        """Test getting Custom App logs for a running app."""
         result = await tools_handler.call_tool("get_app_logs", {
             "app_name": "nginx-demo",
             "lines": 50
         })
-        
+
         assert result.type == "text"
         assert "Logs for" in result.text
         assert "nginx-demo" in result.text
+
+    @pytest.mark.asyncio
+    async def test_get_app_logs_stopped(self, tools_handler):
+        """Test getting logs for a stopped app returns helpful message."""
+        result = await tools_handler.call_tool("get_app_logs", {
+            "app_name": "plex-server",
+            "lines": 50
+        })
+
+        assert result.type == "text"
+        assert "Cannot retrieve logs" in result.text
+        assert "STOPPED" in result.text
+
+    # ── Docker Compose Config Tool Tests ──────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_get_compose_config(self, tools_handler):
+        """Test getting compose config returns YAML."""
+        result = await tools_handler.call_tool("get_compose_config", {
+            "app_name": "nginx-demo",
+        })
+
+        assert result.type == "text"
+        assert "Docker Compose config" in result.text
+        assert "nginx-demo" in result.text
+        assert "nginx:latest" in result.text
+        assert "yaml" in result.text  # code block marker
+
+    @pytest.mark.asyncio
+    async def test_get_compose_config_nonexistent(self, tools_handler):
+        """Test getting compose config for nonexistent app."""
+        result = await tools_handler.call_tool("get_compose_config", {
+            "app_name": "nonexistent-app",
+        })
+
+        assert result.type == "text"
+        assert "❌" in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_compose_config(self, tools_handler):
+        """Test updating compose config with new YAML."""
+        new_yaml = """
+services:
+  web:
+    image: nginx:1.27
+    ports:
+      - "8080:80"
+"""
+        result = await tools_handler.call_tool("update_compose_config", {
+            "app_name": "nginx-demo",
+            "compose_yaml": new_yaml,
+        })
+
+        assert result.type == "text"
+        assert "✅" in result.text
+        assert "nginx-demo" in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_compose_config_nonexistent(self, tools_handler):
+        """Test updating compose config for nonexistent app."""
+        result = await tools_handler.call_tool("update_compose_config", {
+            "app_name": "nonexistent-app",
+            "compose_yaml": "services:\n  web:\n    image: nginx\n",
+        })
+
+        assert result.type == "text"
+        assert "❌" in result.text
 
     @pytest.mark.asyncio
     async def test_invalid_tool_name(self, tools_handler):
@@ -522,7 +591,9 @@ class TestToolSchemas:
             "update_custom_app",
             "update_custom_app_config",
             "delete_custom_app",
-            "get_app_logs"
+            "get_app_logs",
+            "get_compose_config",
+            "update_compose_config",
         ]
         
         for tool in tools:
