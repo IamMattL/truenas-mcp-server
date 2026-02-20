@@ -12,6 +12,8 @@ logger = structlog.get_logger(__name__)
 
 def _format_bytes(num_bytes: int) -> str:
     """Format byte count into human-readable string."""
+    if num_bytes is None:
+        num_bytes = 0
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
         if abs(num_bytes) < 1024.0:
             return f"{num_bytes:.1f} {unit}"
@@ -1031,9 +1033,9 @@ class MCPToolsHandler:
             name = pool.get("name", "?")
             status = pool.get("status", "?")
             healthy = "YES" if pool.get("healthy") else "NO"
-            size = _format_bytes(pool.get("size", 0))
-            alloc = _format_bytes(pool.get("allocated", 0))
-            free = _format_bytes(pool.get("free", 0))
+            size = _format_bytes(pool.get("size") or 0)
+            alloc = _format_bytes(pool.get("allocated") or 0)
+            free = _format_bytes(pool.get("free") or 0)
 
             # Topology type from first data vdev
             topo = pool.get("topology", {}).get("data", [{}])
