@@ -146,7 +146,10 @@ class TrueNASClient:
             logger.info("Disconnected from TrueNAS")
 
     async def _call(self, method: str, *params: Any) -> Any:
-        """Make an API call via the official client."""
+        """Make an API call via the official client.
+
+        Automatically reconnects once if the WebSocket has been dropped.
+        """
         if not self._client:
             raise TrueNASConnectionError("Not connected to TrueNAS")
 
@@ -158,6 +161,20 @@ class TrueNASClient:
             error_str = str(e)
             if "ENOTAUTHENTICATED" in error_str:
                 raise TrueNASAuthenticationError(f"Not authenticated: {e}")
+
+            # Detect dead WebSocket and reconnect once
+            if any(s in error_str.lower() for s in ("closure", "closed", "broken pipe", "connection")):
+                logger.warning("Connection lost, reconnecting", method=method)
+                try:
+                    await self.disconnect()
+                    await self.connect()
+                    result = await self._run_sync(self._client.call, method, *params)
+                    logger.info("Reconnect succeeded", method=method)
+                    return result
+                except Exception as retry_err:
+                    logger.error("Reconnect failed", method=method, error=str(retry_err))
+                    raise TrueNASAPIError(f"API call {method} failed after reconnect: {retry_err}")
+
             logger.error("API call failed", method=method, error=error_str)
             raise TrueNASAPIError(f"API call {method} failed: {e}")
 
