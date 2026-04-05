@@ -23,10 +23,10 @@ class TestMCPToolsHandler:
 
     @pytest.mark.asyncio
     async def test_list_tools(self, tools_handler):
-        """Test tool listing returns all 22 tools."""
+        """Test tool listing returns all 28 tools."""
         tools = await tools_handler.list_tools()
 
-        assert len(tools) == 22
+        assert len(tools) == 33
 
         tool_names = [tool.name for tool in tools]
         expected_tools = [
@@ -49,6 +49,16 @@ class TestMCPToolsHandler:
             "list_snapshots",
             "create_snapshot",
             "delete_snapshot",
+            "create_vm",
+            "add_vm_device",
+            "query_vm_devices",
+            "update_vm_device",
+            "list_vms",
+            "get_vm_status",
+            "start_vm",
+            "stop_vm",
+            "poweroff_vm",
+            "delete_vm",
             "get_system_info",
             "get_storage_pools",
             "get_network_info",

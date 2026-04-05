@@ -145,16 +145,25 @@ class TrueNASClient:
             self.authenticated = False
             logger.info("Disconnected from TrueNAS")
 
-    async def _call(self, method: str, *params: Any) -> Any:
+    async def _call(self, method: str, *params: Any, job: bool = False) -> Any:
         """Make an API call via the official client.
 
         Automatically reconnects once if the WebSocket has been dropped.
+
+        Args:
+            method: The API method to call.
+            *params: Positional arguments for the API method.
+            job: If True, wait for the TrueNAS job to complete and return
+                 the job result instead of the job ID.
         """
         if not self._client:
             raise TrueNASConnectionError("Not connected to TrueNAS")
 
+        def _do_call():
+            return self._client.call(method, *params, job=job)
+
         try:
-            result = await self._run_sync(self._client.call, method, *params)
+            result = await self._run_sync(_do_call)
             logger.debug("API call completed", method=method)
             return result
         except ClientException as e:
@@ -168,7 +177,7 @@ class TrueNASClient:
                 try:
                     await self.disconnect()
                     await self.connect()
-                    result = await self._run_sync(self._client.call, method, *params)
+                    result = await self._run_sync(_do_call)
                     logger.info("Reconnect succeeded", method=method)
                     return result
                 except Exception as retry_err:
@@ -239,23 +248,26 @@ class TrueNASClient:
         app_name: str,
         compose_yaml: str,
         auto_start: bool = True,
-    ) -> bool:
-        """Deploy Custom App from Docker Compose."""
-        from .compose_converter import DockerComposeConverter
+    ) -> str | None:
+        """Deploy Custom App from Docker Compose.
 
-        converter = DockerComposeConverter()
-        app_config = await converter.convert(compose_yaml, app_name)
+        Returns None on success, or an error message string on failure.
+        """
+        app_config = {
+            "app_name": app_name,
+            "custom_app": True,
+            "custom_compose_config_string": compose_yaml,
+            "train": "stable",
+            "version": "latest",
+        }
 
         try:
-            await self._call("app.create", app_config)
-        except TrueNASAPIError as e:
+            await self._call("app.create", app_config, job=True)
+        except (TrueNASAPIError, Exception) as e:
             logger.error("App deployment failed", error=str(e))
-            return False
+            return str(e)
 
-        if auto_start:
-            await self.start_app(app_name)
-
-        return True
+        return None
 
     async def update_app(
         self,
@@ -264,13 +276,12 @@ class TrueNASClient:
         force_recreate: bool = False,
     ) -> bool:
         """Update Custom App."""
-        from .compose_converter import DockerComposeConverter
-
-        converter = DockerComposeConverter()
-        app_config = await converter.convert(compose_yaml, app_name)
+        update_config = {
+            "custom_compose_config_string": compose_yaml,
+        }
 
         try:
-            await self._call("app.update", app_name, app_config)
+            await self._call("app.update", app_name, update_config)
             return True
         except TrueNASAPIError:
             return False
@@ -456,6 +467,66 @@ class TrueNASClient:
 
         return entries
 
+    async def read_file(
+        self,
+        path: str,
+        tail_lines: int = 0,
+    ) -> str:
+        """Read a file from TrueNAS via websocket core.download.
+
+        Uses the already-authenticated websocket connection to request a
+        download URL (which includes a token), then fetches the file via HTTP.
+
+        Args:
+            path: Absolute path to the file on TrueNAS.
+            tail_lines: If > 0, return only the last N lines.
+        """
+        import requests
+
+        normalized = os.path.normpath(path)
+        allowed_prefixes = ("/var/log/", "/mnt/")
+        if not any(normalized.startswith(p) for p in allowed_prefixes):
+            raise ValueError(
+                f"Path must be under one of: {', '.join(allowed_prefixes)}"
+            )
+
+        # Step 1: Use websocket to get a tokenized download URL
+        result = await self._call(
+            "core.download", "filesystem.get", [normalized], "file.log"
+        )
+
+        # core.download returns [job_id, download_url]
+        if not isinstance(result, (list, tuple)) or len(result) < 2:
+            raise TrueNASAPIError(f"Unexpected core.download response: {result}")
+
+        download_path = result[1]
+
+        # Step 2: Download the file (URL includes auth token, no creds needed)
+        scheme = "https" if self.protocol == "wss" else "http"
+        download_url = f"{scheme}://{self.host}{download_path}"
+
+        def _download_file():
+            return requests.get(
+                download_url,
+                verify=self.ssl_verify,
+                timeout=30,
+            )
+
+        file_resp = await self._run_sync(_download_file)
+
+        if file_resp.status_code != 200:
+            raise TrueNASAPIError(
+                f"Failed to download file ({file_resp.status_code}): {file_resp.text[:200]}"
+            )
+
+        content = file_resp.text
+
+        if tail_lines > 0:
+            lines = content.splitlines()
+            content = "\n".join(lines[-tail_lines:])
+
+        return content
+
     # ── ZFS Dataset / Snapshot Tools ──────────────────────────────────
 
     async def list_datasets(
@@ -504,6 +575,132 @@ class TrueNASClient:
         """Delete a ZFS snapshot by full name (e.g. 'Store/Media@snap1')."""
         try:
             await self._call("zfs.snapshot.delete", snapshot_name)
+            return True
+        except TrueNASAPIError:
+            return False
+
+    # ── Virtual Machine Management ───────────────────────────────────
+
+    async def create_vm(
+        self,
+        name: str,
+        vcpus: int = 1,
+        memory: int = 1024,
+        description: str = "",
+        autostart: bool = False,
+        bootloader: str = "UEFI",
+    ) -> Dict[str, Any]:
+        """Create a new virtual machine.
+
+        Creates the VM configuration only. Disks, NICs, and displays
+        must be added separately via add_vm_device or the TrueNAS UI.
+
+        Args:
+            name: VM name.
+            vcpus: Number of virtual CPUs.
+            memory: Memory in MiB.
+            description: Optional description.
+            autostart: Start VM on system boot.
+            bootloader: UEFI or UEFI_CSM.
+        """
+        return await self._call("vm.create", {
+            "name": name,
+            "vcpus": vcpus,
+            "memory": memory,
+            "description": description,
+            "autostart": autostart,
+            "bootloader": bootloader,
+        })
+
+    async def add_vm_device(
+        self, vm_id: int, dtype: str, attributes: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Add a device to a virtual machine.
+
+        Args:
+            vm_id: The VM ID.
+            dtype: Device type — DISK, NIC, DISPLAY, CDROM.
+            attributes: Device-specific attributes.
+        """
+        attributes["dtype"] = dtype
+        return await self._call("vm.device.create", {
+            "vm": vm_id,
+            "attributes": attributes,
+        })
+
+    async def query_vm_devices(self, vm_id: int) -> List[Dict[str, Any]]:
+        """Query all devices attached to a VM."""
+        return await self._call("vm.device.query", [["vm", "=", vm_id]])
+
+    async def update_vm_device(
+        self, device_id: int, updates: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Update a VM device configuration."""
+        return await self._call("vm.device.update", device_id, updates)
+
+    async def list_vms(self) -> List[Dict[str, Any]]:
+        """List all virtual machines."""
+        return await self._call("vm.query")
+
+    async def get_vm_status(self, vm_id: int) -> Dict[str, Any]:
+        """Get VM details by ID."""
+        vms = await self._call("vm.query", [["id", "=", vm_id]])
+        if not vms:
+            raise TrueNASAPIError(f"VM with id {vm_id} not found")
+        return vms[0]
+
+    async def start_vm(self, vm_id: int) -> bool:
+        """Start a virtual machine."""
+        try:
+            await self._call("vm.start", vm_id)
+            return True
+        except TrueNASAPIError:
+            return False
+
+    async def stop_vm(
+        self, vm_id: int, force: bool = False, force_after_timeout: bool = False
+    ) -> bool:
+        """Stop a virtual machine.
+
+        Args:
+            vm_id: The VM ID.
+            force: Immediately power off.
+            force_after_timeout: Try graceful shutdown, then force after timeout.
+        """
+        try:
+            options = {}
+            if force:
+                options["force"] = True
+            if force_after_timeout:
+                options["force_after_timeout"] = True
+            await self._call("vm.stop", vm_id, options if options else {})
+            return True
+        except TrueNASAPIError:
+            return False
+
+    async def poweroff_vm(self, vm_id: int) -> bool:
+        """Hard power-off a virtual machine (like pulling the power cable)."""
+        try:
+            await self._call("vm.poweroff", vm_id)
+            return True
+        except TrueNASAPIError:
+            return False
+
+    async def delete_vm(
+        self, vm_id: int, delete_zvols: bool = False, force: bool = False
+    ) -> bool:
+        """Delete a virtual machine.
+
+        Args:
+            vm_id: The VM ID.
+            delete_zvols: Also delete associated zvol disk images.
+            force: Force-stop the VM first if it is running.
+        """
+        try:
+            await self._call("vm.delete", vm_id, {
+                "zvols": delete_zvols,
+                "force": force,
+            })
             return True
         except TrueNASAPIError:
             return False

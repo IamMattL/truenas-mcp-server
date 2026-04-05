@@ -359,6 +359,27 @@ class MCPToolsHandler:
                 },
             ),
 
+            Tool(
+                name="read_file",
+                description="Read a file from TrueNAS (restricted to /var/log/ and /mnt/)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute file path on TrueNAS (must be under /var/log/ or /mnt/)",
+                        },
+                        "tail_lines": {
+                            "type": "integer",
+                            "default": 0,
+                            "description": "If > 0, return only the last N lines",
+                        },
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            ),
+
             # ── ZFS Dataset / Snapshot Tools ──────────────────────────
             Tool(
                 name="list_datasets",
@@ -431,6 +452,293 @@ class MCPToolsHandler:
                         },
                     },
                     "required": ["snapshot_name", "confirm_deletion"],
+                    "additionalProperties": False,
+                },
+            ),
+
+            # ── Virtual Machine Management ────────────────────────────
+            Tool(
+                name="create_vm",
+                description="Create a new virtual machine. Optionally creates disk, NIC, and display to make it bootable.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Name for the virtual machine",
+                        },
+                        "vcpus": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 1,
+                            "description": "Number of virtual CPUs",
+                        },
+                        "memory": {
+                            "type": "integer",
+                            "minimum": 256,
+                            "default": 1024,
+                            "description": "Memory in MiB",
+                        },
+                        "description": {
+                            "type": "string",
+                            "default": "",
+                            "description": "Optional description",
+                        },
+                        "autostart": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Start VM automatically on system boot",
+                        },
+                        "bootloader": {
+                            "type": "string",
+                            "enum": ["UEFI", "UEFI_CSM"],
+                            "default": "UEFI",
+                            "description": "Bootloader type",
+                        },
+                        "disk_size_gb": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Disk size in GB — creates a zvol automatically (e.g. 20 for 20GB)",
+                        },
+                        "disk_zvol_parent": {
+                            "type": "string",
+                            "default": "Store",
+                            "description": "Parent dataset for the zvol (e.g. 'Store' creates Store/vm-name)",
+                        },
+                        "disk_type": {
+                            "type": "string",
+                            "enum": ["VIRTIO", "AHCI"],
+                            "default": "VIRTIO",
+                            "description": "Disk interface type (AHCI for Windows without virtio drivers)",
+                        },
+                        "nic_attach": {
+                            "type": "string",
+                            "description": "Host network interface to attach NIC to (e.g. 'enp2s0', 'br0'). Omit to skip NIC.",
+                        },
+                        "nic_type": {
+                            "type": "string",
+                            "enum": ["VIRTIO", "E1000"],
+                            "default": "VIRTIO",
+                            "description": "NIC type (E1000 for Windows without virtio drivers)",
+                        },
+                        "display_type": {
+                            "type": "string",
+                            "enum": ["VNC", "SPICE"],
+                            "description": "Display type for console access. Omit to skip display.",
+                        },
+                        "display_password": {
+                            "type": "string",
+                            "description": "Password for display access (required by TrueNAS). Auto-generated if not provided.",
+                        },
+                        "iso_path": {
+                            "type": "string",
+                            "description": "Path to ISO file for CDROM (e.g. '/mnt/Store/ISOs/ubuntu.iso'). Omit to skip.",
+                        },
+                    },
+                    "required": ["name"],
+                    "additionalProperties": False,
+                },
+            ),
+            Tool(
+                name="add_vm_device",
+                description="Add a device (disk, NIC, display, CDROM) to an existing VM",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "vm_id": {
+                            "type": "integer",
+                            "description": "ID of the virtual machine",
+                        },
+                        "device_type": {
+                            "type": "string",
+                            "enum": ["DISK", "NIC", "DISPLAY", "CDROM"],
+                            "description": "Type of device to add",
+                        },
+                        "disk_size_gb": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Disk size in GB (DISK only — creates a zvol)",
+                        },
+                        "disk_zvol_parent": {
+                            "type": "string",
+                            "default": "Store",
+                            "description": "Parent dataset for zvol (DISK only, e.g. 'Store')",
+                        },
+                        "disk_path": {
+                            "type": "string",
+                            "description": "Path to existing zvol or disk image (DISK only — alternative to disk_size_gb)",
+                        },
+                        "nic_attach": {
+                            "type": "string",
+                            "description": "Host interface to attach to (NIC only, e.g. 'enp2s0')",
+                        },
+                        "nic_type": {
+                            "type": "string",
+                            "enum": ["VIRTIO", "E1000"],
+                            "default": "VIRTIO",
+                            "description": "NIC type (NIC only)",
+                        },
+                        "display_type": {
+                            "type": "string",
+                            "enum": ["VNC", "SPICE"],
+                            "default": "SPICE",
+                            "description": "Display protocol (DISPLAY only)",
+                        },
+                        "display_bind": {
+                            "type": "string",
+                            "default": "0.0.0.0",
+                            "description": "IP to bind display to (DISPLAY only)",
+                        },
+                        "display_password": {
+                            "type": "string",
+                            "description": "Password for display access (DISPLAY only, auto-generated if omitted)",
+                        },
+                        "iso_path": {
+                            "type": "string",
+                            "description": "Path to ISO file (CDROM only, e.g. '/mnt/Store/ISOs/ubuntu.iso')",
+                        },
+                    },
+                    "required": ["vm_id", "device_type"],
+                    "additionalProperties": False,
+                },
+            ),
+            Tool(
+                name="query_vm_devices",
+                description="List all devices attached to a VM with their IDs and order",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "vm_id": {
+                            "description": "ID of the virtual machine",
+                        }
+                    },
+                    "required": ["vm_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            Tool(
+                name="update_vm_device",
+                description="Update a VM device configuration (e.g. change boot order)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "device_id": {
+                            "description": "ID of the device to update",
+                        },
+                        "order": {
+                            "description": "Boot order (lower boots first, e.g. 1001)",
+                        },
+                    },
+                    "required": ["device_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            Tool(
+                name="list_vms",
+                description="List all virtual machines with status information",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            ),
+            Tool(
+                name="get_vm_status",
+                description="Get detailed status and configuration for a specific VM",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "vm_id": {
+                            "type": "integer",
+                            "description": "ID of the virtual machine",
+                        }
+                    },
+                    "required": ["vm_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            Tool(
+                name="start_vm",
+                description="Start a virtual machine",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "vm_id": {
+                            "type": "integer",
+                            "description": "ID of the virtual machine to start",
+                        }
+                    },
+                    "required": ["vm_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            Tool(
+                name="stop_vm",
+                description="Stop a virtual machine (graceful ACPI shutdown)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "vm_id": {
+                            "type": "integer",
+                            "description": "ID of the virtual machine to stop",
+                        },
+                        "force": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Force immediate power off",
+                        },
+                        "force_after_timeout": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Try graceful shutdown, then force after timeout",
+                        },
+                    },
+                    "required": ["vm_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            Tool(
+                name="poweroff_vm",
+                description="Hard power-off a VM (use when stop fails — like pulling the power cable)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "vm_id": {
+                            "type": "integer",
+                            "description": "ID of the virtual machine to power off",
+                        }
+                    },
+                    "required": ["vm_id"],
+                    "additionalProperties": False,
+                },
+            ),
+            Tool(
+                name="delete_vm",
+                description="Delete a virtual machine (must confirm deletion)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "vm_id": {
+                            "type": "integer",
+                            "description": "ID of the virtual machine to delete",
+                        },
+                        "delete_zvols": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Also delete associated zvol disk images",
+                        },
+                        "force": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Force-stop the VM first if running",
+                        },
+                        "confirm_deletion": {
+                            "type": "boolean",
+                            "description": "Must be true to confirm deletion",
+                        },
+                    },
+                    "required": ["vm_id", "confirm_deletion"],
                     "additionalProperties": False,
                 },
             ),
@@ -553,6 +861,12 @@ class MCPToolsHandler:
                     include_hidden=arguments.get("include_hidden", False),
                 )
 
+            elif name == "read_file":
+                return await self._read_file(
+                    path=arguments["path"],
+                    tail_lines=arguments.get("tail_lines", 0),
+                )
+
             # ZFS Dataset / Snapshot Tools
             elif name == "list_datasets":
                 return await self._list_datasets(
@@ -574,6 +888,64 @@ class MCPToolsHandler:
             elif name == "delete_snapshot":
                 return await self._delete_snapshot(
                     snapshot_name=arguments["snapshot_name"],
+                    confirm_deletion=arguments["confirm_deletion"],
+                )
+
+            # Virtual Machine Management
+            elif name == "create_vm":
+                return await self._create_vm(
+                    name=arguments["name"],
+                    vcpus=arguments.get("vcpus", 1),
+                    memory=arguments.get("memory", 1024),
+                    description=arguments.get("description", ""),
+                    autostart=arguments.get("autostart", False),
+                    bootloader=arguments.get("bootloader", "UEFI"),
+                    disk_size_gb=arguments.get("disk_size_gb"),
+                    disk_zvol_parent=arguments.get("disk_zvol_parent", "Store"),
+                    disk_type=arguments.get("disk_type", "VIRTIO"),
+                    nic_attach=arguments.get("nic_attach"),
+                    nic_type=arguments.get("nic_type", "VIRTIO"),
+                    display_type=arguments.get("display_type"),
+                    display_password=arguments.get("display_password"),
+                    iso_path=arguments.get("iso_path"),
+                )
+
+            elif name == "add_vm_device":
+                return await self._add_vm_device(arguments)
+
+            elif name == "query_vm_devices":
+                return await self._query_vm_devices(int(arguments["vm_id"]))
+
+            elif name == "update_vm_device":
+                return await self._update_vm_device(
+                    device_id=int(arguments["device_id"]),
+                    order=int(arguments["order"]) if arguments.get("order") is not None else None,
+                )
+
+            elif name == "list_vms":
+                return await self._list_vms()
+
+            elif name == "get_vm_status":
+                return await self._get_vm_status(arguments["vm_id"])
+
+            elif name == "start_vm":
+                return await self._start_vm(arguments["vm_id"])
+
+            elif name == "stop_vm":
+                return await self._stop_vm(
+                    vm_id=arguments["vm_id"],
+                    force=arguments.get("force", False),
+                    force_after_timeout=arguments.get("force_after_timeout", False),
+                )
+
+            elif name == "poweroff_vm":
+                return await self._poweroff_vm(arguments["vm_id"])
+
+            elif name == "delete_vm":
+                return await self._delete_vm(
+                    vm_id=arguments["vm_id"],
+                    delete_zvols=arguments.get("delete_zvols", False),
+                    force=arguments.get("force", False),
                     confirm_deletion=arguments["confirm_deletion"],
                 )
 
@@ -824,8 +1196,8 @@ class MCPToolsHandler:
         auto_start: bool,
     ) -> TextContent:
         """Deploy Custom App."""
-        success = await self.client.deploy_app(app_name, compose_yaml, auto_start)
-        if success:
+        error = await self.client.deploy_app(app_name, compose_yaml, auto_start)
+        if error is None:
             return TextContent(
                 type="text",
                 text=f"✅ Deployed Custom App '{app_name}' successfully"
@@ -833,7 +1205,7 @@ class MCPToolsHandler:
         else:
             return TextContent(
                 type="text",
-                text=f"❌ Failed to deploy Custom App '{app_name}'"
+                text=f"❌ Failed to deploy Custom App '{app_name}': {error}"
             )
     
     async def _update_custom_app(
@@ -997,6 +1369,18 @@ class MCPToolsHandler:
 
         return TextContent(type="text", text="\n".join(lines))
 
+    async def _read_file(
+        self,
+        path: str,
+        tail_lines: int = 0,
+    ) -> TextContent:
+        """Read a file from TrueNAS."""
+        content = await self.client.read_file(path, tail_lines)
+        header = f"File: {path}"
+        if tail_lines > 0:
+            header += f" (last {tail_lines} lines)"
+        return TextContent(type="text", text=f"{header}\n\n{content}")
+
     # ── ZFS Dataset / Snapshot Handlers ───────────────────────────────
 
     async def _list_datasets(
@@ -1087,6 +1471,336 @@ class MCPToolsHandler:
             return TextContent(
                 type="text",
                 text=f"❌ Failed to delete snapshot '{snapshot_name}'",
+            )
+
+    # ── Virtual Machine Handlers ─────────────────────────────────────
+
+    async def _create_vm(
+        self,
+        name: str,
+        vcpus: int,
+        memory: int,
+        description: str,
+        autostart: bool,
+        bootloader: str,
+        disk_size_gb: Optional[int] = None,
+        disk_zvol_parent: str = "Store",
+        disk_type: str = "VIRTIO",
+        nic_attach: Optional[str] = None,
+        nic_type: str = "VIRTIO",
+        display_type: Optional[str] = None,
+        display_password: Optional[str] = None,
+        iso_path: Optional[str] = None,
+    ) -> TextContent:
+        """Create a new VM, optionally with devices for bootability."""
+        result = await self.client.create_vm(
+            name=name,
+            vcpus=vcpus,
+            memory=memory,
+            description=description,
+            autostart=autostart,
+            bootloader=bootloader,
+        )
+        vm_id = result.get("id", "?")
+        lines = [
+            f"✅ Created VM '{name}' (ID: {vm_id})",
+            f"  vCPUs: {vcpus}, Memory: {memory} MiB, Bootloader: {bootloader}",
+        ]
+
+        devices_added = []
+
+        # Add disk (zvol)
+        if disk_size_gb:
+            zvol_name = f"{disk_zvol_parent}/vms/{name}"
+            zvol_size = disk_size_gb * 1024 * 1024 * 1024
+            try:
+                # Ensure parent dataset exists
+                parent_ds = f"{disk_zvol_parent}/vms"
+                try:
+                    await self.client._call("pool.dataset.create", {
+                        "name": parent_ds,
+                    })
+                    devices_added.append(f"  + Created dataset '{parent_ds}'")
+                except Exception:
+                    pass  # Already exists, that's fine
+
+                await self.client.add_vm_device(vm_id, "DISK", {
+                    "create_zvol": True,
+                    "zvol_name": zvol_name,
+                    "zvol_volsize": zvol_size,
+                    "type": disk_type,
+                })
+                devices_added.append(f"  + DISK: {zvol_name} ({disk_size_gb} GB, {disk_type})")
+            except Exception as e:
+                devices_added.append(f"  ! DISK failed: {e}")
+
+        # Add NIC
+        if nic_attach:
+            try:
+                await self.client.add_vm_device(vm_id, "NIC", {
+                    "type": nic_type,
+                    "nic_attach": nic_attach,
+                })
+                devices_added.append(f"  + NIC: {nic_type} on {nic_attach}")
+            except Exception as e:
+                devices_added.append(f"  ! NIC failed: {e}")
+
+        # Add display
+        if display_type:
+            import secrets
+            password = display_password or secrets.token_urlsafe(12)
+            try:
+                await self.client.add_vm_device(vm_id, "DISPLAY", {
+                    "type": display_type,
+                    "bind": "0.0.0.0",
+                    "password": password,
+                    "web": True,
+                })
+                devices_added.append(f"  + DISPLAY: {display_type} (web enabled, password: {password})")
+            except Exception as e:
+                devices_added.append(f"  ! DISPLAY failed: {e}")
+
+        # Add CDROM (ISO)
+        if iso_path:
+            try:
+                await self.client.add_vm_device(vm_id, "CDROM", {
+                    "path": iso_path,
+                })
+                devices_added.append(f"  + CDROM: {iso_path}")
+            except Exception as e:
+                devices_added.append(f"  ! CDROM failed: {e}")
+
+        if devices_added:
+            lines.append("\n  Devices:")
+            lines.extend(devices_added)
+        else:
+            lines.append("  Note: No devices added — add disk, NIC, and display before starting.")
+
+        return TextContent(type="text", text="\n".join(lines))
+
+    async def _add_vm_device(self, arguments: Dict[str, Any]) -> TextContent:
+        """Add a device to an existing VM."""
+        vm_id = arguments["vm_id"]
+        dtype = arguments["device_type"]
+        attrs: Dict[str, Any] = {}
+
+        if dtype == "DISK":
+            if arguments.get("disk_path"):
+                attrs["path"] = arguments["disk_path"]
+                attrs["type"] = "VIRTIO"
+            elif arguments.get("disk_size_gb"):
+                # Need VM name for zvol naming — fetch it
+                vm = await self.client.get_vm_status(vm_id)
+                vm_name = vm.get("name", f"vm-{vm_id}")
+                parent = arguments.get("disk_zvol_parent", "Store")
+                attrs["create_zvol"] = True
+                attrs["zvol_name"] = f"{parent}/vms/{vm_name}"
+                attrs["zvol_volsize"] = arguments["disk_size_gb"] * 1024 * 1024 * 1024
+                attrs["type"] = "VIRTIO"
+            else:
+                return TextContent(
+                    type="text",
+                    text="❌ DISK requires either disk_size_gb (to create zvol) or disk_path (existing disk)",
+                )
+
+        elif dtype == "NIC":
+            attrs["type"] = arguments.get("nic_type", "VIRTIO")
+            if arguments.get("nic_attach"):
+                attrs["nic_attach"] = arguments["nic_attach"]
+
+        elif dtype == "DISPLAY":
+            import secrets
+            attrs["type"] = arguments.get("display_type", "SPICE")
+            attrs["bind"] = arguments.get("display_bind", "0.0.0.0")
+            attrs["password"] = arguments.get("display_password") or secrets.token_urlsafe(12)
+            attrs["web"] = True
+
+        elif dtype == "CDROM":
+            if not arguments.get("iso_path"):
+                return TextContent(
+                    type="text",
+                    text="❌ CDROM requires iso_path",
+                )
+            attrs["path"] = arguments["iso_path"]
+
+        result = await self.client.add_vm_device(vm_id, dtype, attrs)
+        device_id = result.get("id", "?")
+        return TextContent(
+            type="text",
+            text=f"✅ Added {dtype} device (ID: {device_id}) to VM {vm_id}",
+        )
+
+    async def _query_vm_devices(self, vm_id: int) -> TextContent:
+        """Query all devices attached to a VM."""
+        devices = await self.client.query_vm_devices(vm_id)
+
+        if not devices:
+            return TextContent(type="text", text=f"No devices found for VM {vm_id}")
+
+        lines = [f"Devices for VM {vm_id}\n"]
+        lines.append(f"{'ID':<6} {'Type':<10} {'Order':<7} Details")
+        lines.append("-" * 60)
+        for dev in devices:
+            dev_id = dev.get("id", "?")
+            attrs = dev.get("attributes", {})
+            dtype = attrs.get("dtype", dev.get("dtype", "?"))
+            order = dev.get("order", "?")
+
+            if dtype == "DISK":
+                detail = attrs.get("path", attrs.get("zvol_name", "?"))
+            elif dtype == "NIC":
+                detail = f"{attrs.get('type', '?')} on {attrs.get('nic_attach', '?')}"
+            elif dtype == "DISPLAY":
+                detail = f"{attrs.get('type', '?')} bind:{attrs.get('bind', '?')}"
+            elif dtype == "CDROM":
+                detail = attrs.get("path", "?")
+            else:
+                detail = str(attrs)[:50]
+
+            lines.append(f"{dev_id:<6} {dtype:<10} {str(order):<7} {detail}")
+
+        return TextContent(type="text", text="\n".join(lines))
+
+    async def _update_vm_device(
+        self, device_id: int, order: Optional[int] = None
+    ) -> TextContent:
+        """Update a VM device."""
+        updates = {}
+        if order is not None:
+            updates["order"] = order
+
+        if not updates:
+            return TextContent(type="text", text="❌ No updates specified")
+
+        await self.client.update_vm_device(device_id, updates)
+        return TextContent(
+            type="text",
+            text=f"✅ Updated device {device_id} (order: {order})",
+        )
+
+    async def _list_vms(self) -> TextContent:
+        """List all virtual machines."""
+        vms = await self.client.list_vms()
+
+        if not vms:
+            return TextContent(type="text", text="No virtual machines found")
+
+        lines = ["Virtual Machines\n"]
+        lines.append(f"{'ID':<5} {'Name':<25} {'State':<12} {'vCPUs':>5} {'Memory':>10}  Description")
+        lines.append("-" * 80)
+        for vm in vms:
+            vm_id = vm.get("id", "?")
+            name = vm.get("name", "?")
+            status = vm.get("status", {})
+            state = status.get("state", "UNKNOWN") if isinstance(status, dict) else "UNKNOWN"
+            vcpus = vm.get("vcpus", "?")
+            mem_bytes = (vm.get("memory") or 0) * 1024 * 1024  # memory is in MiB
+            mem_str = _format_bytes(mem_bytes)
+            desc = vm.get("description", "")[:30]
+            lines.append(f"{vm_id:<5} {name:<25} {state:<12} {vcpus:>5} {mem_str:>10}  {desc}")
+
+        return TextContent(type="text", text="\n".join(lines))
+
+    async def _get_vm_status(self, vm_id: int) -> TextContent:
+        """Get detailed VM status."""
+        vm = await self.client.get_vm_status(vm_id)
+
+        status = vm.get("status", {})
+        state = status.get("state", "UNKNOWN") if isinstance(status, dict) else "UNKNOWN"
+        pid = status.get("pid") if isinstance(status, dict) else None
+
+        lines = [
+            f"VM '{vm.get('name', '?')}' (ID: {vm_id})\n",
+            f"  State       : {state}",
+            f"  vCPUs       : {vm.get('vcpus', '?')}",
+            f"  Memory      : {vm.get('memory', '?')} MiB",
+            f"  Autostart   : {vm.get('autostart', False)}",
+            f"  Bootloader  : {vm.get('bootloader', '?')}",
+            f"  Description : {vm.get('description', '-')}",
+        ]
+
+        if pid:
+            lines.append(f"  PID         : {pid}")
+
+        # Show devices if present
+        devices = vm.get("devices", [])
+        if devices:
+            lines.append(f"\n  Devices ({len(devices)}):")
+            for dev in devices:
+                attrs = dev.get("attributes", {})
+                dtype = attrs.get("dtype", dev.get("dtype", "?"))
+                order = dev.get("order", "?")
+                if dtype == "DISK":
+                    lines.append(f"    - DISK: {attrs.get('path', '?')} (order: {order})")
+                elif dtype == "NIC":
+                    lines.append(f"    - NIC: {attrs.get('type', '?')} ({attrs.get('nic_attach', '?')})")
+                elif dtype == "DISPLAY":
+                    lines.append(f"    - DISPLAY: {attrs.get('type', '?')} port {attrs.get('port', '?')}")
+                elif dtype == "CDROM":
+                    lines.append(f"    - CDROM: {attrs.get('path', '?')} (order: {order})")
+                else:
+                    lines.append(f"    - {dtype}")
+
+        return TextContent(type="text", text="\n".join(lines))
+
+    async def _start_vm(self, vm_id: int) -> TextContent:
+        """Start a VM."""
+        success = await self.client.start_vm(vm_id)
+        if success:
+            return TextContent(type="text", text=f"✅ Started VM {vm_id}")
+        else:
+            return TextContent(type="text", text=f"❌ Failed to start VM {vm_id}")
+
+    async def _stop_vm(
+        self, vm_id: int, force: bool, force_after_timeout: bool
+    ) -> TextContent:
+        """Stop a VM."""
+        success = await self.client.stop_vm(vm_id, force, force_after_timeout)
+        mode = "force" if force else ("force-after-timeout" if force_after_timeout else "graceful")
+        if success:
+            return TextContent(type="text", text=f"✅ Stop signal sent to VM {vm_id} ({mode})")
+        else:
+            return TextContent(type="text", text=f"❌ Failed to stop VM {vm_id}")
+
+    async def _poweroff_vm(self, vm_id: int) -> TextContent:
+        """Hard power-off a VM."""
+        success = await self.client.poweroff_vm(vm_id)
+        if success:
+            return TextContent(type="text", text=f"✅ Powered off VM {vm_id}")
+        else:
+            return TextContent(type="text", text=f"❌ Failed to power off VM {vm_id}")
+
+    async def _delete_vm(
+        self,
+        vm_id: int,
+        delete_zvols: bool,
+        force: bool,
+        confirm_deletion: bool,
+    ) -> TextContent:
+        """Delete a VM."""
+        if not confirm_deletion:
+            return TextContent(
+                type="text",
+                text="❌ Deletion not confirmed. Set confirm_deletion=true to proceed.",
+            )
+
+        success = await self.client.delete_vm(vm_id, delete_zvols, force)
+        extras = []
+        if delete_zvols:
+            extras.append("zvols deleted")
+        if force:
+            extras.append("force-stopped")
+        extra_str = f" ({', '.join(extras)})" if extras else ""
+
+        if success:
+            return TextContent(
+                type="text",
+                text=f"✅ Deleted VM {vm_id}{extra_str}",
+            )
+        else:
+            return TextContent(
+                type="text",
+                text=f"❌ Failed to delete VM {vm_id}",
             )
 
     # ── System / Pool / Network Handlers ──────────────────────────────

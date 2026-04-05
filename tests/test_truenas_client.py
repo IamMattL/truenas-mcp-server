@@ -115,7 +115,7 @@ services:
 """
 
         result = await mock_client.deploy_app("new-app", compose_yaml, auto_start=True)
-        assert result is True
+        assert result is None
 
         # Verify app was added
         apps = await mock_client.list_custom_apps("all")
@@ -700,7 +700,7 @@ class TestTrueNASClient:
         result = await truenas_client.get_app_config("app1")
         assert result["name"] == "app1"
         assert result["config"]["services"]["web"]["image"] == "nginx:latest"
-        mock_tn_client.call.assert_called_once_with("app.get_instance", "app1")
+        mock_tn_client.call.assert_called_once_with("app.get_instance", "app1", job=False)
 
     @pytest.mark.asyncio
     async def test_update_app_config_success(self, truenas_client):
@@ -714,8 +714,8 @@ class TestTrueNASClient:
         assert result is True
         # Existence check + actual update = 2 calls
         assert mock_tn_client.call.call_count == 2
-        mock_tn_client.call.assert_any_call("app.get_instance", "app1")
-        mock_tn_client.call.assert_any_call("app.update", "app1", config)
+        mock_tn_client.call.assert_any_call("app.get_instance", "app1", job=False)
+        mock_tn_client.call.assert_any_call("app.update", "app1", config, job=False)
 
     @pytest.mark.asyncio
     async def test_update_app_config_failure(self, truenas_client):

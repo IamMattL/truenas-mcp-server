@@ -171,6 +171,55 @@ class MockTrueNASClient:
             },
         ]
 
+        # Virtual machine mock data
+        self.mock_vms = {
+            1: {
+                "id": 1,
+                "name": "ubuntu-server",
+                "description": "Ubuntu 22.04 LTS server",
+                "vcpus": 2,
+                "memory": 4096,
+                "autostart": True,
+                "bootloader": "UEFI",
+                "status": {"state": "RUNNING", "pid": 12345},
+                "devices": [
+                    {"dtype": "DISK", "attributes": {"path": "/dev/zvol/Store/vms/ubuntu-server"}},
+                    {"dtype": "NIC", "attributes": {"type": "VIRTIO", "nic_attach": "enp2s0"}},
+                    {"dtype": "DISPLAY", "attributes": {"type": "VNC", "port": 5900}},
+                ],
+            },
+            2: {
+                "id": 2,
+                "name": "haos",
+                "description": "Home Assistant OS",
+                "vcpus": 2,
+                "memory": 2048,
+                "autostart": True,
+                "bootloader": "UEFI",
+                "status": {"state": "RUNNING", "pid": 12400},
+                "devices": [
+                    {"dtype": "DISK", "attributes": {"path": "/dev/zvol/Store/vms/haos"}},
+                    {"dtype": "NIC", "attributes": {"type": "VIRTIO", "nic_attach": "enp2s0"}},
+                ],
+            },
+            3: {
+                "id": 3,
+                "name": "windows-11",
+                "description": "Windows 11 test VM",
+                "vcpus": 4,
+                "memory": 8192,
+                "autostart": False,
+                "bootloader": "UEFI",
+                "status": {"state": "STOPPED", "pid": None},
+                "devices": [
+                    {"dtype": "DISK", "attributes": {"path": "/dev/zvol/Store/vms/windows-11"}},
+                    {"dtype": "NIC", "attributes": {"type": "VIRTIO", "nic_attach": "enp2s0"}},
+                    {"dtype": "DISPLAY", "attributes": {"type": "VNC", "port": 5901}},
+                    {"dtype": "CDROM", "attributes": {"path": "/mnt/Store/ISOs/Win11.iso"}},
+                ],
+            },
+        }
+
         self.mock_apps = {
             "nginx-demo": {
                 "name": "nginx-demo",
@@ -342,11 +391,11 @@ class MockTrueNASClient:
         app_name: str,
         compose_yaml: str,
         auto_start: bool = True,
-    ) -> bool:
-        """Mock deploy Custom App."""
+    ) -> str | None:
+        """Mock deploy Custom App. Returns None on success, error string on failure."""
         logger.info("Mock: Deploying app", app=app_name, auto_start=auto_start)
         await asyncio.sleep(1.0)  # Simulate deployment time
-        
+
         # Add new app to mock data
         self.mock_apps[app_name] = {
             "name": app_name,
@@ -355,7 +404,7 @@ class MockTrueNASClient:
             "ports": ["8080:80"],  # Mock port
             "created": "2025-07-30T12:00:00Z",
         }
-        return True
+        return None
 
     async def update_app(
         self,
@@ -482,6 +531,16 @@ class MockTrueNASClient:
 
     # ── Filesystem Tools ──────────────────────────────────────────────
 
+    async def read_file(
+        self,
+        path: str,
+        tail_lines: int = 0,
+    ) -> str:
+        """Mock read file from TrueNAS."""
+        logger.info("Mock: Reading file", path=path, tail_lines=tail_lines)
+        await asyncio.sleep(0.1)
+        return f"[Mock file content for {path}]"
+
     async def list_directory(
         self,
         path: str = "/mnt",
@@ -564,6 +623,123 @@ class MockTrueNASClient:
                 self.mock_snapshots.pop(i)
                 return True
         return False
+
+    # ── Virtual Machine Management ───────────────────────────────────
+
+    async def create_vm(
+        self,
+        name: str,
+        vcpus: int = 1,
+        memory: int = 1024,
+        description: str = "",
+        autostart: bool = False,
+        bootloader: str = "UEFI",
+    ) -> Dict[str, Any]:
+        """Mock create VM."""
+        logger.info("Mock: Creating VM", name=name, vcpus=vcpus, memory=memory)
+        await asyncio.sleep(0.3)
+
+        new_id = max(self.mock_vms.keys(), default=0) + 1
+        self.mock_vms[new_id] = {
+            "id": new_id,
+            "name": name,
+            "description": description,
+            "vcpus": vcpus,
+            "memory": memory,
+            "autostart": autostart,
+            "bootloader": bootloader,
+            "status": {"state": "STOPPED", "pid": None},
+            "devices": [],
+        }
+        return {"id": new_id}
+
+    async def add_vm_device(
+        self, vm_id: int, dtype: str, attributes: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Mock add device to VM."""
+        logger.info("Mock: Adding device to VM", vm_id=vm_id, dtype=dtype)
+        await asyncio.sleep(0.2)
+
+        if vm_id not in self.mock_vms:
+            raise Exception(f"VM with id {vm_id} not found")
+
+        device = {"dtype": dtype, "attributes": attributes}
+        self.mock_vms[vm_id]["devices"].append(device)
+        new_id = sum(len(v["devices"]) for v in self.mock_vms.values())
+        return {"id": new_id}
+
+    async def query_vm_devices(self, vm_id: int) -> List[Dict[str, Any]]:
+        """Mock query VM devices."""
+        logger.info("Mock: Querying VM devices", vm_id=vm_id)
+        await asyncio.sleep(0.1)
+        if vm_id not in self.mock_vms:
+            raise Exception(f"VM with id {vm_id} not found")
+        devices = []
+        for i, dev in enumerate(self.mock_vms[vm_id]["devices"]):
+            devices.append({"id": i + 1, "vm": vm_id, "order": 1000 + i, **dev})
+        return devices
+
+    async def update_vm_device(
+        self, device_id: int, updates: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Mock update VM device."""
+        logger.info("Mock: Updating VM device", device_id=device_id, updates=updates)
+        await asyncio.sleep(0.1)
+        return {"id": device_id, **updates}
+
+    async def list_vms(self) -> List[Dict[str, Any]]:
+        """Mock list VMs."""
+        logger.info("Mock: Listing VMs")
+        await asyncio.sleep(0.1)
+        return list(self.mock_vms.values())
+
+    async def get_vm_status(self, vm_id: int) -> Dict[str, Any]:
+        """Mock get VM status."""
+        logger.info("Mock: Getting VM status", vm_id=vm_id)
+        await asyncio.sleep(0.1)
+        if vm_id not in self.mock_vms:
+            raise Exception(f"VM with id {vm_id} not found")
+        return dict(self.mock_vms[vm_id])
+
+    async def start_vm(self, vm_id: int) -> bool:
+        """Mock start VM."""
+        logger.info("Mock: Starting VM", vm_id=vm_id)
+        await asyncio.sleep(0.3)
+        if vm_id not in self.mock_vms:
+            return False
+        self.mock_vms[vm_id]["status"] = {"state": "RUNNING", "pid": 99999}
+        return True
+
+    async def stop_vm(
+        self, vm_id: int, force: bool = False, force_after_timeout: bool = False
+    ) -> bool:
+        """Mock stop VM."""
+        logger.info("Mock: Stopping VM", vm_id=vm_id, force=force)
+        await asyncio.sleep(0.3)
+        if vm_id not in self.mock_vms:
+            return False
+        self.mock_vms[vm_id]["status"] = {"state": "STOPPED", "pid": None}
+        return True
+
+    async def poweroff_vm(self, vm_id: int) -> bool:
+        """Mock power off VM."""
+        logger.info("Mock: Powering off VM", vm_id=vm_id)
+        await asyncio.sleep(0.2)
+        if vm_id not in self.mock_vms:
+            return False
+        self.mock_vms[vm_id]["status"] = {"state": "STOPPED", "pid": None}
+        return True
+
+    async def delete_vm(
+        self, vm_id: int, delete_zvols: bool = False, force: bool = False
+    ) -> bool:
+        """Mock delete VM."""
+        logger.info("Mock: Deleting VM", vm_id=vm_id, delete_zvols=delete_zvols)
+        await asyncio.sleep(0.3)
+        if vm_id not in self.mock_vms:
+            return False
+        del self.mock_vms[vm_id]
+        return True
 
     # ── System / Pool / Network Info ──────────────────────────────────
 
