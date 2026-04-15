@@ -1,0 +1,27 @@
+# Cloudflare Tunnel Configuration for TrueNAS MCP Server
+#
+# This routes traffic from Cloudflare's edge to your self-hosted MCP server.
+# Prerequisites:
+#   1. Install cloudflared: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/
+#   2. Authenticate: cloudflared tunnel login
+#   3. Create tunnel: cloudflared tunnel create truenas-mcp
+#   4. Copy this file to ~/.cloudflared/config.yml and update values
+#
+# Usage:
+#   cloudflared tunnel run truenas-mcp
+
+tunnel: YOUR_TUNNEL_ID
+credentials-file: /root/.cloudflared/YOUR_TUNNEL_ID.json
+
+ingress:
+  # Route MCP traffic to the local HTTP server
+  - hostname: truenas-mcp.your-domain.com
+    service: http://localhost:8080
+    originRequest:
+      noTLSVerify: false
+      connectTimeout: 30s
+      # Cloudflare Access will handle authentication
+      # The MCP server validates the Cf-Access-Jwt-Assertion header
+
+  # Catch-all rule (required by cloudflared)
+  - service: http_status:404

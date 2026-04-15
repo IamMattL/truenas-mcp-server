@@ -252,6 +252,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "compose: mark test as Docker Compose related test"
     )
+    config.addinivalue_line(
+        "markers", "cloudflare: mark test as Cloudflare integration test"
+    )
 
 
 # Cleanup fixtures
