@@ -10,6 +10,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool
 
+from .discovery import DiscoveryToolsHandler
 from .mcp_tools import MCPToolsHandler
 from .truenas_client import TrueNASClient
 
@@ -24,6 +25,7 @@ class TrueNASMCPServer:
         self.server = Server("truenas-scale-mcp")
         self.truenas_client: TrueNASClient | None = None
         self.tools_handler: MCPToolsHandler | None = None
+        self.discovery_handler: DiscoveryToolsHandler | None = None
         self._init_lock = asyncio.Lock()
         
         # Configuration from environment
@@ -37,6 +39,7 @@ class TrueNASMCPServer:
             "ssl_verify": os.getenv("TRUENAS_SSL_VERIFY", "true").lower() == "true",
             "debug_mode": os.getenv("DEBUG_MODE", "false").lower() == "true",
             "mock_mode": os.getenv("MOCK_TRUENAS", "false").lower() == "true",
+            "discovery_mode": os.getenv("MCP_DISCOVERY_MODE", "false").lower() == "true",
         }
         
         # Setup logging
@@ -79,18 +82,41 @@ class TrueNASMCPServer:
         # Static tool definitions - no connection needed
         static_tools_handler = MCPToolsHandler(None)
 
+        if self.config["discovery_mode"]:
+            self.discovery_handler = DiscoveryToolsHandler(
+                catalog_handler=static_tools_handler,
+                exec_handler_provider=self._get_live_tools_handler,
+            )
+            logger.info(
+                "Dynamic tool discovery enabled",
+                tools_exposed=2,
+                note="search_tools + execute_tool replace the full registry",
+            )
+
         @self.server.list_tools()
         async def list_tools() -> List[Tool]:
             """List available MCP tools (static, no connection required)."""
+            if self.discovery_handler is not None:
+                return await self.discovery_handler.list_tools()
             return await static_tools_handler.list_tools()
 
         @self.server.call_tool()
         async def call_tool(name: str, arguments: Dict[str, Any]) -> Any:
             """Execute an MCP tool (connects on first call)."""
+            if self.discovery_handler is not None:
+                result = await self.discovery_handler.call_tool(name, arguments)
+                return [result]
             if not self.tools_handler:
                 await self._initialize_clients()
             result = await self.tools_handler.call_tool(name, arguments)
             return [result]
+
+    async def _get_live_tools_handler(self) -> MCPToolsHandler:
+        """Return the client-backed tools handler, initializing it on demand."""
+        if not self.tools_handler:
+            await self._initialize_clients()
+        assert self.tools_handler is not None
+        return self.tools_handler
 
     async def _initialize_clients(self) -> None:
         """Initialize TrueNAS client and tools handler (thread-safe)."""
