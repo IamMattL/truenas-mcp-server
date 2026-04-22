@@ -74,6 +74,7 @@ Create a dedicated service account on TrueNAS for MCP access:
 | `TRUENAS_SSL_VERIFY` | Verify SSL certificates (`true`/`false`) | `true` | No |
 | `DEBUG_MODE` | Enable debug logging (`true`/`false`) | `false` | No |
 | `MOCK_TRUENAS` | Use mock client for development (`true`/`false`) | `false` | No |
+| `MCP_DISCOVERY_MODE` | Expose tools via dynamic discovery (`search_tools` + `execute_tool`) instead of registering all 33 upfront | `false` | No |
 
 ### Testing the Server
 
@@ -216,7 +217,9 @@ SCRAM mechanisms are not available in the current TrueNAS API.
 
 ## Available MCP Tools
 
-The server provides 20 MCP tools across five categories:
+The server provides 33 MCP tools across six categories. By default each tool is
+registered upfront, but see [Dynamic Tool Discovery](#dynamic-tool-discovery)
+below for an alternative mode that collapses them into two meta-tools.
 
 ### Connection Management
 - **`test_connection`** - Test TrueNAS API connectivity and authentication
@@ -255,6 +258,38 @@ The server provides 20 MCP tools across five categories:
 - **`get_system_info`** - Get system info (hostname, version, uptime, CPU, RAM)
 - **`get_storage_pools`** - Get storage pool health, capacity, and scrub status
 - **`get_network_info`** - Get network interface information (IPs, link state, speed)
+
+## Dynamic Tool Discovery
+
+Set `MCP_DISCOVERY_MODE=true` to replace the full 33-tool registry with two
+meta-tools. This mirrors the pattern Cloudflare adopted after observing that
+default MCP deployments burn a large fraction of the context window just
+describing what's available (~9.4k tokens for a 33-tool registry like this
+one).
+
+With discovery mode on, the server advertises only:
+
+- **`search_tools`** — Discover tools on demand. Takes an optional `query`
+  (keyword), `category` (`connection`, `app`, `filesystem`, `storage`, `vm`,
+  `system`), exact `name` (returns the full input schema for one tool), and
+  `limit`. With no arguments it lists every tool grouped by category.
+- **`execute_tool`** — Invoke any tool by `name` with an `arguments` object
+  matching that tool's input schema. The request is transparently routed to
+  the same handlers used in default mode.
+
+**Trade-offs:**
+
+- ✅ Baseline `tools/list` payload shrinks by ~94%, and stays flat as new
+  tools are added.
+- ✅ All 33 tools remain available — nothing is removed, only surfaced
+  lazily.
+- ⚠️ Models that expect to see tools directly in `tools/list` need to be
+  guided (via system prompt) to call `search_tools` first.
+- ⚠️ Each invocation costs one extra round-trip (`search_tools` →
+  `execute_tool`) the first time the model discovers a tool.
+
+Enable it by adding `"MCP_DISCOVERY_MODE": "true"` to the `env` block of your
+MCP server configuration.
 
 ## Usage Examples
 
