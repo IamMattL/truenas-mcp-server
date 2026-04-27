@@ -1,0 +1,61 @@
+# Cloudflare Mesh node deployed as a TrueNAS Custom App.
+#
+# This puts the host on Cloudflare's Mesh network with a private Mesh IP
+# (in 100.96.0.0/12). The MCP server itself can then bind to localhost on
+# port 8080 (MCP_TRANSPORT=http) and be reached from any other Mesh node
+# or, eventually, an MCP Server Portal.
+#
+# Prerequisites on the TrueNAS host (set via System Settings -> Advanced ->
+# Sysctl, with "Apply on boot" enabled — DO NOT write to /etc/sysctl.d/
+# directly, that path can be wiped on TrueNAS upgrades):
+#
+#   net.ipv4.ip_forward = 1
+#   net.ipv6.conf.all.forwarding = 1
+#   net.ipv6.conf.all.accept_ra = 2
+#
+# Deploy:
+#   1. Build & push the image (see README.md in this directory).
+#   2. In TrueNAS, Apps -> Custom App, paste this Compose.
+#   3. Set CONNECTOR_TOKEN as a secret env var in the TrueNAS UI — never
+#      commit the token value.
+
+services:
+  warp-connector:
+    image: ghcr.io/iammattl/warp-connector:latest
+    # network_mode: host puts warp-svc's tun interface in the host's network
+    # namespace so the host (and anything bound to its localhost) gets the
+    # Mesh IP. Without this the connector would only route the container's
+    # own namespace, which defeats the goal of remoting the MCP server.
+    network_mode: host
+    cap_add:
+      # warp-svc creates and configures a tun interface, installs routes,
+      # and writes iptables rules. NET_ADMIN is the minimum capability that
+      # allows all three; --privileged would also work but grants far more
+      # than is needed.
+      - NET_ADMIN
+    devices:
+      # /dev/net/tun must be passed through. With network_mode: host this
+      # is the host's tun device node; warp-svc opens it to create the
+      # CloudflareWARP interface. Containers without device pass-through
+      # fail at warp-cli connect with "operation not permitted".
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      # Persistent state: registration keys, device identity, gateway
+      # config. Without this volume, every container restart consumes a
+      # fresh CONNECTOR_TOKEN and registers as a new node, leaving stale
+      # entries in the CF dashboard.
+      - warp-state:/var/lib/cloudflare-warp
+    environment:
+      # Set this in the TrueNAS UI as a secret env var. Token is generated
+      # in the CF dashboard at Networking -> Mesh -> Add a node, and is
+      # only used for the first registration; subsequent restarts skip it
+      # (see entrypoint.sh).
+      CONNECTOR_TOKEN: "${CONNECTOR_TOKEN}"
+    restart: unless-stopped
+    # Bound RAM. warp-svc itself sits well under 50 MB resident; this
+    # leaves headroom for the kernel-side socket buffers Cloudflare's
+    # docs recommend without permitting runaway growth.
+    mem_limit: 256m
+
+volumes:
+  warp-state:
