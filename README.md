@@ -22,7 +22,7 @@ This MCP server wraps the official `truenas_api_client` (synchronous, websocket-
 - **MCP SDK**: v1.26.0
 - **TrueNAS Scale**: 24.10+ (Electric Eel) and 25.10+ (Fangtooth)
 - **Python**: 3.10+
-- **Transport**: stdio with JSON-RPC 2.0
+- **Transport**: stdio (default) or Streamable HTTP for remote access via a Cloudflare Server Portal — see [Remote HTTP Transport](#remote-http-transport)
 
 ## Quick Start
 
@@ -290,6 +290,39 @@ With discovery mode on, the server advertises only:
 
 Enable it by adding `"MCP_DISCOVERY_MODE": "true"` to the `env` block of your
 MCP server configuration.
+
+## Remote HTTP Transport
+
+Set `MCP_TRANSPORT=http` to expose the server over Streamable HTTP instead of
+stdio. This is intended for remote-access setups where a Cloudflare Server
+Portal (or equivalent zero-trust front end) terminates identity, device
+posture, and per-tool policy upstream — the HTTP endpoint here does not
+authenticate requests itself and must not be reachable from the public
+internet.
+
+```bash
+MCP_TRANSPORT=http \
+MCP_HTTP_HOST=127.0.0.1 \
+MCP_HTTP_PORT=8080 \
+poetry run python -m truenas_mcp.mcp_server
+```
+
+Routes:
+
+- `GET /health` — liveness probe.
+- `GET /ready` — readiness probe (503 until the first tool call lazily
+  connects to TrueNAS, 200 thereafter).
+- `GET|POST|DELETE /mcp` — MCP Streamable HTTP endpoint, keyed per session
+  by the `Mcp-Session-Id` request header.
+
+Environment variables:
+
+| Var | Default | Notes |
+|---|---|---|
+| `MCP_TRANSPORT` | `stdio` | `stdio` or `http`. |
+| `MCP_HTTP_HOST` | `0.0.0.0` | Bind address for HTTP mode. |
+| `MCP_HTTP_PORT` | `8080` | Bind port for HTTP mode. |
+| `MCP_ALLOWED_ORIGINS` | `*` | Comma-separated allowlist for DNS-rebinding protection. Tighten once the portal hostname is known. |
 
 ## Usage Examples
 
