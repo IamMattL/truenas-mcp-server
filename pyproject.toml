@@ -13,6 +13,13 @@ truenas-api-client = {git = "https://github.com/truenas/api_client.git"}
 pyyaml = "^6.0"
 jsonschema = "^4.0"
 structlog = "^24.1.0"
+# Optional HTTP transport: only loaded when MCP_TRANSPORT=http (the imports
+# in mcp_server.create_http_app are lazy), but kept as runtime deps so
+# `pip install` / `poetry install` produces a single environment that can
+# run either transport without an extras flag.
+starlette = "^0.36.0"
+uvicorn = "^0.27.0"
+httpx = "^0.27.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
