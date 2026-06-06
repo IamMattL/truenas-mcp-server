@@ -218,11 +218,19 @@ class TrueNASClient:
         return await self._call("app.get_instance", app_name)
 
     async def update_app_config(self, app_name: str, config: Dict[str, Any]) -> bool:
-        """Update Custom App configuration with a raw config dict."""
+        """Update Custom App configuration with a raw config dict.
+
+        For the TrueNAS "Custom App" (ix-app) template, editable settings —
+        ``envs``, ``ports``, ``image``, etc. — live under the ``values`` key,
+        so the provided dict is wrapped accordingly. Passing it at the top
+        level (as this used to) makes ``app.update`` silently ignore it.
+        ``app.update`` runs as a job (a container rollout), so we wait for it
+        to finish before returning success.
+        """
         try:
             # Verify app exists first (app.update silently accepts nonexistent apps)
             await self._call("app.get_instance", app_name)
-            await self._call("app.update", app_name, config)
+            await self._call("app.update", app_name, {"values": config}, job=True)
             return True
         except TrueNASAPIError:
             return False
@@ -481,7 +489,7 @@ class TrueNASClient:
             path: Absolute path to the file on TrueNAS.
             tail_lines: If > 0, return only the last N lines.
         """
-        import requests
+        import httpx
 
         normalized = os.path.normpath(path)
         allowed_prefixes = ("/var/log/", "/mnt/")
@@ -503,16 +511,10 @@ class TrueNASClient:
 
         # Step 2: Download the file (URL includes auth token, no creds needed)
         scheme = "https" if self.protocol == "wss" else "http"
-        download_url = f"{scheme}://{self.host}{download_path}"
+        download_url = f"{scheme}://{self.host}:{self.port}{download_path}"
 
-        def _download_file():
-            return requests.get(
-                download_url,
-                verify=self.ssl_verify,
-                timeout=30,
-            )
-
-        file_resp = await self._run_sync(_download_file)
+        async with httpx.AsyncClient(verify=self.ssl_verify, timeout=30) as client:
+            file_resp = await client.get(download_url)
 
         if file_resp.status_code != 200:
             raise TrueNASAPIError(
@@ -526,6 +528,79 @@ class TrueNASClient:
             content = "\n".join(lines[-tail_lines:])
 
         return content
+
+    async def write_file(
+        self,
+        path: str,
+        content: str,
+        mode: str = "0644",
+    ) -> int:
+        """Write a file to TrueNAS via the HTTP /_upload endpoint.
+
+        Mirrors :meth:`read_file`: the websocket connection mints a one-shot
+        auth token, then the bytes are POSTed to ``/_upload`` which runs the
+        ``filesystem.put`` job server-side. Restricted to ``/mnt/`` so it can
+        only touch user data, not system paths.
+
+        Args:
+            path: Absolute destination path (must be under /mnt/).
+            content: File contents to write.
+            mode: Octal permission string applied to the file.
+
+        Returns:
+            Number of bytes written.
+        """
+        import json
+
+        import httpx
+
+        normalized = os.path.normpath(path)
+        if not normalized.startswith("/mnt/"):
+            raise ValueError("Path must be under /mnt/")
+
+        data = content.encode() if isinstance(content, str) else content
+        # filesystem.put expects an integer (octal) mode, not a string.
+        mode_int = int(mode, 8) if isinstance(mode, str) else int(mode)
+
+        # One-shot token authorises the stateless HTTP upload request.
+        token = await self._call("auth.generate_token", 600, {}, True)
+
+        scheme = "https" if self.protocol == "wss" else "http"
+        upload_url = f"{scheme}://{self.host}:{self.port}/_upload"
+        payload = json.dumps(
+            {"method": "filesystem.put", "params": [normalized, {"mode": mode_int}]}
+        )
+        files = {
+            "data": (None, payload),
+            "file": ("file", data, "application/octet-stream"),
+        }
+
+        def _upload():
+            return httpx.post(
+                upload_url,
+                files=files,
+                headers={"Authorization": f"Token {token}"},
+                verify=self.ssl_verify,
+                timeout=60,
+            )
+
+        resp = await self._run_sync(_upload)
+
+        if resp.status_code not in (200, 201):
+            raise TrueNASAPIError(
+                f"Upload failed ({resp.status_code}): {resp.text[:200]}"
+            )
+
+        # The POST only *queues* a filesystem.put job; wait for it to finish so
+        # a failed write raises instead of silently returning a byte count.
+        try:
+            job_id = resp.json().get("job_id")
+        except (ValueError, AttributeError):
+            job_id = None
+        if job_id is not None:
+            await self._call("core.job_wait", job_id, job=True)
+
+        return len(data)
 
     # ── ZFS Dataset / Snapshot Tools ──────────────────────────────────
 

@@ -26,7 +26,7 @@ class TestMCPToolsHandler:
         """Test tool listing returns all 28 tools."""
         tools = await tools_handler.list_tools()
 
-        assert len(tools) == 33
+        assert len(tools) == 34
 
         tool_names = [tool.name for tool in tools]
         expected_tools = [
@@ -45,6 +45,8 @@ class TestMCPToolsHandler:
             "get_compose_config",
             "update_compose_config",
             "list_directory",
+            "read_file",
+            "write_file",
             "list_datasets",
             "list_snapshots",
             "create_snapshot",

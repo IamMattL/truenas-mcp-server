@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 import structlog
 from mcp.types import TextContent, Tool
 
-from .truenas_client import TrueNASClient
+from .truenas_client import TrueNASAPIError, TrueNASClient
 
 logger = structlog.get_logger(__name__)
 
@@ -376,6 +376,30 @@ class MCPToolsHandler:
                         },
                     },
                     "required": ["path"],
+                    "additionalProperties": False,
+                },
+            ),
+            Tool(
+                name="write_file",
+                description="Write a text file to TrueNAS (restricted to /mnt/). Overwrites if it exists.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute destination path on TrueNAS (must be under /mnt/)",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "File contents to write",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "default": "0644",
+                            "description": "Octal permission string for the file",
+                        },
+                    },
+                    "required": ["path", "content"],
                     "additionalProperties": False,
                 },
             ),
@@ -865,6 +889,13 @@ class MCPToolsHandler:
                 return await self._read_file(
                     path=arguments["path"],
                     tail_lines=arguments.get("tail_lines", 0),
+                )
+
+            elif name == "write_file":
+                return await self._write_file(
+                    path=arguments["path"],
+                    content=arguments["content"],
+                    mode=arguments.get("mode", "0644"),
                 )
 
             # ZFS Dataset / Snapshot Tools
@@ -1380,6 +1411,22 @@ class MCPToolsHandler:
         if tail_lines > 0:
             header += f" (last {tail_lines} lines)"
         return TextContent(type="text", text=f"{header}\n\n{content}")
+
+    async def _write_file(
+        self,
+        path: str,
+        content: str,
+        mode: str = "0644",
+    ) -> TextContent:
+        """Write a file to TrueNAS."""
+        try:
+            written = await self.client.write_file(path, content, mode)
+            return TextContent(
+                type="text",
+                text=f"✅ Wrote {written} bytes to '{path}'",
+            )
+        except (ValueError, TrueNASAPIError) as e:
+            return TextContent(type="text", text=f"❌ Failed to write '{path}': {e}")
 
     # ── ZFS Dataset / Snapshot Handlers ───────────────────────────────
 

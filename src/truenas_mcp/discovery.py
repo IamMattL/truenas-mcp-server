@@ -47,6 +47,7 @@ _TOOL_CATEGORIES: Dict[str, str] = {
     "update_compose_config": "app",
     "list_directory": "filesystem",
     "read_file": "filesystem",
+    "write_file": "filesystem",
     "list_datasets": "storage",
     "list_snapshots": "storage",
     "create_snapshot": "storage",
