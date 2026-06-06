@@ -715,7 +715,11 @@ class TestTrueNASClient:
         # Existence check + actual update = 2 calls
         assert mock_tn_client.call.call_count == 2
         mock_tn_client.call.assert_any_call("app.get_instance", "app1", job=False)
-        mock_tn_client.call.assert_any_call("app.update", "app1", config, job=False)
+        # ix-app settings live under "values"; the config is wrapped and the
+        # rollout job is awaited (job=True).
+        mock_tn_client.call.assert_any_call(
+            "app.update", "app1", {"values": config}, job=True
+        )
 
     @pytest.mark.asyncio
     async def test_update_app_config_failure(self, truenas_client):
@@ -727,3 +731,37 @@ class TestTrueNASClient:
 
         result = await truenas_client.update_app_config("nonexistent", {"config": {}})
         assert result is False
+
+    @pytest.mark.asyncio
+    async def test_write_file_uploads_via_http(self, truenas_client):
+        """write_file mints a token and POSTs to the /_upload endpoint."""
+        mock_tn_client = MagicMock()
+        mock_tn_client.call.return_value = "tok123"  # auth.generate_token / job_wait
+        truenas_client._client = mock_tn_client
+
+        mock_resp = MagicMock(status_code=200, text='{"job_id": 7}')
+        mock_resp.json.return_value = {"job_id": 7}
+        with patch("httpx.post", return_value=mock_resp) as mock_post:
+            written = await truenas_client.write_file("/mnt/tank/x.txt", "hello")
+
+        assert written == 5
+        mock_tn_client.call.assert_any_call(
+            "auth.generate_token", 600, {}, True, job=False
+        )
+        # The queued filesystem.put job must be awaited.
+        mock_tn_client.call.assert_any_call("core.job_wait", 7, job=True)
+        args, kwargs = mock_post.call_args
+        assert args[0].endswith("/_upload")
+        assert kwargs["headers"]["Authorization"] == "Token tok123"
+        # The filesystem.put target path travels in the multipart 'data' field,
+        # with an integer (octal) mode.
+        assert "/mnt/tank/x.txt" in kwargs["files"]["data"][1]
+        assert '"mode": 420' in kwargs["files"]["data"][1]
+
+    @pytest.mark.asyncio
+    async def test_write_file_rejects_paths_outside_mnt(self, truenas_client):
+        """write_file refuses to write outside /mnt/ and never opens a connection."""
+        truenas_client._client = MagicMock()
+        with pytest.raises(ValueError):
+            await truenas_client.write_file("/etc/passwd", "x")
+        truenas_client._client.call.assert_not_called()
