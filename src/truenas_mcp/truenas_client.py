@@ -236,17 +236,17 @@ class TrueNASClient:
             return False
 
     async def start_app(self, app_name: str) -> bool:
-        """Start Custom App."""
+        """Start Custom App. app.start is a job, so wait for it to finish."""
         try:
-            await self._call("app.start", app_name)
+            await self._call("app.start", app_name, job=True)
             return True
         except TrueNASAPIError:
             return False
 
     async def stop_app(self, app_name: str) -> bool:
-        """Stop Custom App."""
+        """Stop Custom App. app.stop is a job, so wait for it to finish."""
         try:
-            await self._call("app.stop", app_name)
+            await self._call("app.stop", app_name, job=True)
             return True
         except TrueNASAPIError:
             return False
@@ -289,18 +289,32 @@ class TrueNASClient:
         }
 
         try:
-            await self._call("app.update", app_name, update_config)
+            await self._call("app.update", app_name, update_config, job=True)
             return True
         except TrueNASAPIError:
             return False
 
     async def delete_app(self, app_name: str, delete_volumes: bool = False) -> bool:
-        """Delete Custom App."""
+        """Delete Custom App.
+
+        app.delete takes an options object (not a bare bool) and is a job, so
+        the call must wait for completion. Without job=True it returns as soon
+        as the job is queued, reporting success even when the delete fails.
+        """
+        options = {
+            "remove_images": True,
+            "remove_ix_volumes": delete_volumes,
+            # ix_volumes holding data are skipped unless removal is forced.
+            "force_remove_ix_volumes": delete_volumes,
+        }
         try:
-            await self._call("app.delete", app_name, delete_volumes)
-            return True
+            await self._call("app.delete", app_name, options, job=True)
         except TrueNASAPIError:
             return False
+
+        # Confirm the app is actually gone rather than trusting the job result.
+        remaining = await self._call("app.query", [["name", "=", app_name]])
+        return not remaining
 
     async def validate_compose(
         self,
