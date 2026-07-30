@@ -480,6 +480,46 @@ class MCPToolsHandler:
                 },
             ),
 
+            Tool(
+                name="delete_dataset",
+                description=(
+                    "Destroy a ZFS dataset and everything in it. Irreversible: "
+                    "the data and all its snapshots are gone immediately, with no "
+                    "recycle bin and no undo. Refuses pool root datasets."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": (
+                                "Dataset to destroy, in pool/dataset form "
+                                "(e.g. 'Services/coder')"
+                            ),
+                        },
+                        "confirm_deletion": {
+                            "type": "boolean",
+                            "description": "Safety confirmation for destructive operation",
+                        },
+                        "recursive": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": (
+                                "Also destroy child datasets. Required if the "
+                                "dataset has any children."
+                            ),
+                        },
+                        "force": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Destroy even if the dataset is busy (in use)",
+                        },
+                    },
+                    "required": ["name", "confirm_deletion"],
+                    "additionalProperties": False,
+                },
+            ),
+
             # ── Virtual Machine Management ────────────────────────────
             Tool(
                 name="create_vm",
@@ -914,6 +954,14 @@ class MCPToolsHandler:
                     dataset=arguments["dataset"],
                     name=arguments["name"],
                     recursive=arguments.get("recursive", False),
+                )
+
+            elif name == "delete_dataset":
+                return await self._delete_dataset(
+                    dataset_name=arguments["name"],
+                    confirm_deletion=arguments["confirm_deletion"],
+                    recursive=arguments.get("recursive", False),
+                    force=arguments.get("force", False),
                 )
 
             elif name == "delete_snapshot":
@@ -1519,6 +1567,40 @@ class MCPToolsHandler:
                 type="text",
                 text=f"❌ Failed to delete snapshot '{snapshot_name}'",
             )
+
+    async def _delete_dataset(
+        self,
+        dataset_name: str,
+        confirm_deletion: bool,
+        recursive: bool,
+        force: bool,
+    ) -> TextContent:
+        """Destroy a ZFS dataset."""
+        if not confirm_deletion:
+            return TextContent(
+                type="text",
+                text="❌ Deletion not confirmed. Set confirm_deletion=true to proceed.",
+            )
+
+        result = await self.client.delete_dataset(dataset_name, recursive, force)
+
+        lines = [f"✅ Destroyed dataset '{result['name']}'"]
+        lines.append(f"   Reclaimed: {_format_bytes(result['used_bytes'])}")
+
+        children = result.get("children_destroyed") or []
+        if children:
+            lines.append(f"   Child datasets destroyed: {len(children)}")
+            for child in children:
+                lines.append(f"     - {child}")
+
+        snapshots = result.get("snapshots_destroyed", 0)
+        if snapshots:
+            lines.append(f"   Snapshots destroyed: {snapshots}")
+
+        if force:
+            lines.append("   (forced: dataset was in use)")
+
+        return TextContent(type="text", text="\n".join(lines))
 
     # ── Virtual Machine Handlers ─────────────────────────────────────
 

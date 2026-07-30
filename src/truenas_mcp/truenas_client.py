@@ -654,6 +654,62 @@ class TrueNASClient:
         except TrueNASAPIError:
             return False
 
+    async def delete_dataset(
+        self,
+        name: str,
+        recursive: bool = False,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """Destroy a ZFS dataset, irreversibly.
+
+        Unlike delete_snapshot this surfaces the API error rather than
+        collapsing it to False: the usual failures ("dataset is busy", "has
+        children") are the whole diagnosis, and a bare False throws them away.
+
+        Returns a summary of what was destroyed so the caller can report it.
+        """
+        if "/" not in name:
+            raise ValueError(
+                f"Refusing to delete '{name}': that is a pool root dataset. "
+                "Datasets must be given in pool/dataset form (e.g. 'Services/coder'). "
+                "Destroy a pool from the TrueNAS UI, not from here."
+            )
+
+        # Confirm it exists and capture its size before it goes.
+        matches = await self._call("pool.dataset.query", [["id", "=", name]])
+        if not matches:
+            raise ValueError(f"Dataset '{name}' does not exist")
+        dataset = matches[0]
+        used = int(dataset.get("used", {}).get("rawvalue", 0) or 0)
+
+        children = await self._call("pool.dataset.query", [["id", "^", f"{name}/"]])
+        snapshots = await self._call("zfs.snapshot.query", [["dataset", "=", name]])
+
+        # The middleware would reject this anyway, but its error does not say
+        # which children are in the way.
+        if children and not recursive:
+            child_names = ", ".join(sorted(c["id"] for c in children))
+            raise ValueError(
+                f"Dataset '{name}' has {len(children)} child dataset(s) and "
+                f"recursive is not set: {child_names}. "
+                "Pass recursive=true to destroy them along with the parent."
+            )
+
+        await self._call(
+            "pool.dataset.delete",
+            name,
+            {"recursive": recursive, "force": force},
+        )
+
+        return {
+            "name": name,
+            "used_bytes": used,
+            "children_destroyed": [c["id"] for c in children],
+            "snapshots_destroyed": len(snapshots),
+            "recursive": recursive,
+            "force": force,
+        }
+
     # ── Virtual Machine Management ───────────────────────────────────
 
     async def create_vm(

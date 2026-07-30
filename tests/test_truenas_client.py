@@ -370,6 +370,82 @@ services:
         result = await mock_client.delete_snapshot("Store/Media@doesnotexist")
         assert result is False
 
+    @pytest.mark.asyncio
+    async def test_delete_dataset_leaf(self, mock_client):
+        """Deleting a childless dataset reports its size and removes it."""
+        result = await mock_client.delete_dataset("Store/Apps")
+
+        assert result["name"] == "Store/Apps"
+        assert result["used_bytes"] == 536870912000
+        assert result["children_destroyed"] == []
+
+        remaining = [d["id"] for d in await mock_client.list_datasets()]
+        assert "Store/Apps" not in remaining
+
+    @pytest.mark.asyncio
+    async def test_delete_dataset_takes_snapshots_with_it(self, mock_client):
+        """Destroying a dataset destroys its snapshots too, and says how many."""
+        result = await mock_client.delete_dataset("Store/Media")
+
+        assert result["snapshots_destroyed"] == 1
+        remaining = [s["dataset"] for s in await mock_client.list_snapshots()]
+        assert "Store/Media" not in remaining
+
+    @pytest.mark.asyncio
+    async def test_delete_dataset_refuses_pool_root(self, mock_client):
+        """A bare pool name is refused rather than passed to the API."""
+        with pytest.raises(ValueError, match="pool root dataset"):
+            await mock_client.delete_dataset("Store")
+
+        remaining = [d["id"] for d in await mock_client.list_datasets()]
+        assert "Store" in remaining
+
+    @pytest.mark.asyncio
+    async def test_delete_dataset_nonexistent(self, mock_client):
+        """A missing dataset is an error, not a silent success."""
+        with pytest.raises(ValueError, match="does not exist"):
+            await mock_client.delete_dataset("Store/NotHere")
+
+    @pytest.mark.asyncio
+    async def test_delete_dataset_with_children_needs_recursive(self, mock_client):
+        """Children block a non-recursive delete, and are named in the error.
+
+        Uses a nested dataset rather than the pool root, because the pool-root
+        guard fires first and would mask this check entirely.
+        """
+        mock_client.mock_datasets.append({
+            "id": "Store/Apps/nested",
+            "pool": "Store",
+            "name": "Store/Apps/nested",
+            "type": "FILESYSTEM",
+            "used": {"rawvalue": "1024"},
+            "available": {"rawvalue": "1024"},
+            "mountpoint": "/mnt/Store/Apps/nested",
+        })
+
+        with pytest.raises(ValueError, match="recursive is not set"):
+            await mock_client.delete_dataset("Store/Apps")
+
+    @pytest.mark.asyncio
+    async def test_delete_dataset_recursive_removes_children(self, mock_client):
+        """Recursive delete takes the children with it."""
+        mock_client.mock_datasets.append({
+            "id": "Store/Apps/nested",
+            "pool": "Store",
+            "name": "Store/Apps/nested",
+            "type": "FILESYSTEM",
+            "used": {"rawvalue": "1024"},
+            "available": {"rawvalue": "1024"},
+            "mountpoint": "/mnt/Store/Apps/nested",
+        })
+
+        result = await mock_client.delete_dataset("Store/Apps", recursive=True)
+
+        assert result["children_destroyed"] == ["Store/Apps/nested"]
+        remaining = [d["id"] for d in await mock_client.list_datasets()]
+        assert "Store/Apps" not in remaining
+        assert "Store/Apps/nested" not in remaining
+
     # ── System / Pool / Network Tests ─────────────────────────────────
 
     @pytest.mark.asyncio

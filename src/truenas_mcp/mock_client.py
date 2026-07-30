@@ -624,6 +624,53 @@ class MockTrueNASClient:
                 return True
         return False
 
+    async def delete_dataset(
+        self,
+        name: str,
+        recursive: bool = False,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """Mock destroy ZFS dataset."""
+        logger.info("Mock: Deleting dataset", dataset=name, recursive=recursive)
+        await asyncio.sleep(0.2)
+
+        if "/" not in name:
+            raise ValueError(
+                f"Refusing to delete '{name}': that is a pool root dataset. "
+                "Datasets must be given in pool/dataset form (e.g. 'Services/coder'). "
+                "Destroy a pool from the TrueNAS UI, not from here."
+            )
+
+        match = next((d for d in self.mock_datasets if d["id"] == name), None)
+        if match is None:
+            raise ValueError(f"Dataset '{name}' does not exist")
+
+        children = [d for d in self.mock_datasets if d["id"].startswith(f"{name}/")]
+        if children and not recursive:
+            child_names = ", ".join(sorted(c["id"] for c in children))
+            raise ValueError(
+                f"Dataset '{name}' has {len(children)} child dataset(s) and "
+                f"recursive is not set: {child_names}. "
+                "Pass recursive=true to destroy them along with the parent."
+            )
+
+        snapshots = [s for s in self.mock_snapshots if s["dataset"] == name]
+
+        doomed = {name} | {c["id"] for c in children}
+        self.mock_datasets = [d for d in self.mock_datasets if d["id"] not in doomed]
+        self.mock_snapshots = [
+            s for s in self.mock_snapshots if s["dataset"] not in doomed
+        ]
+
+        return {
+            "name": name,
+            "used_bytes": int(match.get("used", {}).get("rawvalue", 0) or 0),
+            "children_destroyed": [c["id"] for c in children],
+            "snapshots_destroyed": len(snapshots),
+            "recursive": recursive,
+            "force": force,
+        }
+
     # ── Virtual Machine Management ───────────────────────────────────
 
     async def create_vm(

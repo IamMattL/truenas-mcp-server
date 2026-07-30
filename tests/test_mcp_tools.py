@@ -23,10 +23,10 @@ class TestMCPToolsHandler:
 
     @pytest.mark.asyncio
     async def test_list_tools(self, tools_handler):
-        """Test tool listing returns all 28 tools."""
+        """Test tool listing returns every registered tool."""
         tools = await tools_handler.list_tools()
 
-        assert len(tools) == 34
+        assert len(tools) == 35
 
         tool_names = [tool.name for tool in tools]
         expected_tools = [
@@ -51,6 +51,7 @@ class TestMCPToolsHandler:
             "list_snapshots",
             "create_snapshot",
             "delete_snapshot",
+            "delete_dataset",
             "create_vm",
             "add_vm_device",
             "query_vm_devices",
@@ -525,6 +526,67 @@ services:
         assert result.type == "text"
         assert "❌" in result.text
         assert "not confirmed" in result.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_delete_dataset_confirmed(self, tools_handler):
+        """Destroying a dataset reports what was reclaimed."""
+        result = await tools_handler.call_tool("delete_dataset", {
+            "name": "Store/Apps",
+            "confirm_deletion": True,
+        })
+
+        assert result.type == "text"
+        assert "✅" in result.text
+        assert "Store/Apps" in result.text
+        assert "Reclaimed" in result.text
+
+    @pytest.mark.asyncio
+    async def test_delete_dataset_not_confirmed(self, tools_handler):
+        """Without confirmation nothing is destroyed."""
+        result = await tools_handler.call_tool("delete_dataset", {
+            "name": "Store/Apps",
+            "confirm_deletion": False,
+        })
+
+        assert result.type == "text"
+        assert "❌" in result.text
+        assert "not confirmed" in result.text.lower()
+
+        datasets = await tools_handler.client.list_datasets()
+        assert "Store/Apps" in [d["id"] for d in datasets]
+
+    @pytest.mark.asyncio
+    async def test_delete_dataset_pool_root_surfaces_error(self, tools_handler):
+        """The pool-root refusal reaches the caller instead of a bare failure."""
+        result = await tools_handler.call_tool("delete_dataset", {
+            "name": "Store",
+            "confirm_deletion": True,
+        })
+
+        assert result.type == "text"
+        assert "❌" in result.text
+        assert "pool root dataset" in result.text
+
+    @pytest.mark.asyncio
+    async def test_delete_dataset_children_error_names_them(self, tools_handler):
+        """A blocked recursive delete tells you which children are in the way."""
+        tools_handler.client.mock_datasets.append({
+            "id": "Store/Apps/nested",
+            "pool": "Store",
+            "name": "Store/Apps/nested",
+            "type": "FILESYSTEM",
+            "used": {"rawvalue": "1024"},
+            "available": {"rawvalue": "1024"},
+            "mountpoint": "/mnt/Store/Apps/nested",
+        })
+
+        result = await tools_handler.call_tool("delete_dataset", {
+            "name": "Store/Apps",
+            "confirm_deletion": True,
+        })
+
+        assert "❌" in result.text
+        assert "Store/Apps/nested" in result.text
 
     # ── System / Pool / Network Tool Tests ────────────────────────────
 
