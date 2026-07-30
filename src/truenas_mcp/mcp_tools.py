@@ -555,6 +555,86 @@ class MCPToolsHandler:
             ),
 
             Tool(
+                name="update_dataset",
+                description=(
+                    "Change properties on an existing dataset. Note that "
+                    "compression and recordsize apply to newly written data only: "
+                    "existing data keeps whatever it was written with, and is only "
+                    "converted by rewriting it. Quotas take effect immediately. "
+                    "share_type, casesensitivity, encryption and the name are fixed "
+                    "at creation and cannot be changed here."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": (
+                                "Dataset to update (e.g. 'Store/Media'). A pool root "
+                                "is allowed, so children can inherit the change."
+                            ),
+                        },
+                        "compression": {
+                            "type": "string",
+                            "description": (
+                                "Compression algorithm. Applies to new writes only. "
+                                "Common values: LZ4, ZSTD, ZSTD-FAST, OFF, INHERIT."
+                            ),
+                        },
+                        "recordsize": {
+                            "type": "string",
+                            "enum": [
+                                "512", "512B", "1K", "2K", "4K", "8K", "16K", "32K",
+                                "64K", "128K", "256K", "512K", "1M", "2M", "4M",
+                                "8M", "16M",
+                            ],
+                            "description": "Record size. Applies to new writes only.",
+                        },
+                        "quota": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": (
+                                "Quota in bytes, including child datasets and "
+                                "snapshots. 0 removes the quota. Effective immediately."
+                            ),
+                        },
+                        "refquota": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": (
+                                "Quota in bytes for this dataset's own data, excluding "
+                                "snapshots and children. 0 removes it."
+                            ),
+                        },
+                        "atime": {
+                            "type": "string",
+                            "enum": ["ON", "OFF", "INHERIT"],
+                            "description": "Update access times on read",
+                        },
+                        "readonly": {
+                            "type": "string",
+                            "enum": ["ON", "OFF", "INHERIT"],
+                            "description": "Make the dataset read-only",
+                        },
+                        "sync": {
+                            "type": "string",
+                            "enum": ["STANDARD", "ALWAYS", "DISABLED", "INHERIT"],
+                            "description": (
+                                "Synchronous write behaviour. DISABLED risks data loss "
+                                "on power failure."
+                            ),
+                        },
+                        "comments": {
+                            "type": "string",
+                            "description": "Description shown in the TrueNAS UI",
+                        },
+                    },
+                    "required": ["name"],
+                    "additionalProperties": False,
+                },
+            ),
+
+            Tool(
                 name="delete_dataset",
                 description=(
                     "Destroy a ZFS dataset and everything in it. Irreversible: "
@@ -1040,6 +1120,19 @@ class MCPToolsHandler:
                     share_type=arguments.get("share_type"),
                     comments=arguments.get("comments"),
                     create_ancestors=arguments.get("create_ancestors", False),
+                )
+
+            elif name == "update_dataset":
+                return await self._update_dataset(
+                    dataset_name=arguments["name"],
+                    compression=arguments.get("compression"),
+                    recordsize=arguments.get("recordsize"),
+                    quota=arguments.get("quota"),
+                    refquota=arguments.get("refquota"),
+                    atime=arguments.get("atime"),
+                    readonly=arguments.get("readonly"),
+                    sync=arguments.get("sync"),
+                    comments=arguments.get("comments"),
                 )
 
             elif name == "delete_dataset":
@@ -1693,6 +1786,76 @@ class MCPToolsHandler:
 
         if quota:
             lines.append(f"   Quota: {_format_bytes(quota)}")
+
+        return TextContent(type="text", text="\n".join(lines))
+
+    # ZFS applies these to newly written blocks only. Existing data keeps
+    # whatever it was written with until it is rewritten, so reporting these
+    # as simply "updated" would overstate what the call did.
+    _FUTURE_WRITES_ONLY = frozenset({"compression", "recordsize"})
+
+    async def _update_dataset(
+        self,
+        dataset_name: str,
+        compression: Optional[str],
+        recordsize: Optional[str],
+        quota: Optional[int],
+        refquota: Optional[int],
+        atime: Optional[str],
+        readonly: Optional[str],
+        sync: Optional[str],
+        comments: Optional[str],
+    ) -> TextContent:
+        """Update properties on an existing dataset."""
+        result = await self.client.update_dataset(
+            dataset_name,
+            compression=compression,
+            recordsize=recordsize,
+            quota=quota,
+            refquota=refquota,
+            atime=atime,
+            readonly=readonly,
+            sync=sync,
+            comments=comments,
+        )
+
+        dataset = result["dataset"]
+        requested = result["requested"]
+
+        def stored(prop: str) -> str:
+            """Report what TrueNAS stored, not what was asked for.
+
+            `comments` is a ZFS user property, so it comes back under
+            user_properties while the top-level `comments` key stays null.
+            Reading only the top level reports a successful change as "?".
+            """
+            raw = dataset.get(prop)
+            if not isinstance(raw, dict) or raw.get("value") is None:
+                raw = (dataset.get("user_properties") or {}).get(prop)
+            if isinstance(raw, dict):
+                value = raw.get("value", raw.get("rawvalue"))
+                return str(value) if value is not None else "?"
+            return str(raw) if raw is not None else "?"
+
+        immediate = [p for p in requested if p not in self._FUTURE_WRITES_ONLY]
+        deferred = [p for p in requested if p in self._FUTURE_WRITES_ONLY]
+
+        lines = [f"✅ Updated dataset '{dataset_name}'"]
+
+        if immediate:
+            lines.append("   In effect now:")
+            for prop in immediate:
+                lines.append(f"     {prop}: {stored(prop)}")
+
+        if deferred:
+            lines.append("   Applies to newly written data only:")
+            for prop in deferred:
+                lines.append(f"     {prop}: {stored(prop)}")
+            lines.append(
+                "   Existing data keeps its current layout until rewritten. "
+                "Copying a dataset to convert it also costs its size again in "
+                "snapshots until those expire."
+            )
 
         return TextContent(type="text", text="\n".join(lines))
 

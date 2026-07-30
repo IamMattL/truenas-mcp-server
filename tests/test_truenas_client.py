@@ -425,6 +425,44 @@ services:
         assert "Store/Temp" not in listed
 
     @pytest.mark.asyncio
+    async def test_update_dataset(self, mock_client):
+        """Updating applies the property and reports what was requested."""
+        result = await mock_client.update_dataset("Store/Media", quota=1073741824)
+
+        assert result["requested"] == ["quota"]
+        assert result["dataset"]["quota"]["rawvalue"] == "1073741824"
+
+    @pytest.mark.asyncio
+    async def test_update_dataset_multiple_properties(self, mock_client):
+        """Every property passed is applied, and all are reported."""
+        result = await mock_client.update_dataset(
+            "Store/Media", compression="ZSTD", atime="OFF", quota=1073741824,
+        )
+
+        assert result["requested"] == ["atime", "compression", "quota"]
+        assert result["dataset"]["compression"]["value"] == "ZSTD"
+        assert result["dataset"]["atime"]["value"] == "OFF"
+
+    @pytest.mark.asyncio
+    async def test_update_dataset_no_properties(self, mock_client):
+        """A call with nothing to change is an error, not a silent no-op."""
+        with pytest.raises(ValueError, match="No properties given"):
+            await mock_client.update_dataset("Store/Media")
+
+    @pytest.mark.asyncio
+    async def test_update_dataset_nonexistent(self, mock_client):
+        """Updating a missing dataset fails clearly."""
+        with pytest.raises(ValueError, match="does not exist"):
+            await mock_client.update_dataset("Store/NotHere", quota=1024)
+
+    @pytest.mark.asyncio
+    async def test_update_dataset_allows_pool_root(self, mock_client):
+        """Pool roots are updatable, unlike create and delete which refuse them."""
+        result = await mock_client.update_dataset("Store", compression="ZSTD")
+
+        assert result["dataset"]["compression"]["value"] == "ZSTD"
+
+    @pytest.mark.asyncio
     async def test_delete_dataset_leaf(self, mock_client):
         """Deleting a childless dataset reports its size and removes it."""
         result = await mock_client.delete_dataset("Store/Apps")

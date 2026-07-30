@@ -254,6 +254,7 @@ below for an alternative mode that collapses them into two meta-tools.
 - **`create_snapshot`** - Create a ZFS snapshot for backup or rollback
 - **`delete_snapshot`** - Delete a ZFS snapshot
 - **`create_dataset`** - Create a ZFS filesystem dataset (unset options inherit from the parent; zvols not supported)
+- **`update_dataset`** - Change dataset properties (compression and recordsize apply to new writes only; quotas take effect immediately)
 - **`delete_dataset`** - Destroy a ZFS dataset and everything in it (irreversible; refuses pool roots, and requires `recursive` when the dataset has children)
 
 ### System Information

@@ -26,7 +26,7 @@ class TestMCPToolsHandler:
         """Test tool listing returns every registered tool."""
         tools = await tools_handler.list_tools()
 
-        assert len(tools) == 36
+        assert len(tools) == 37
 
         tool_names = [tool.name for tool in tools]
         expected_tools = [
@@ -52,6 +52,7 @@ class TestMCPToolsHandler:
             "create_snapshot",
             "delete_snapshot",
             "create_dataset",
+            "update_dataset",
             "delete_dataset",
             "create_vm",
             "add_vm_device",
@@ -561,6 +562,74 @@ services:
 
         assert "❌" in result.text
         assert "pool name, not a dataset" in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_dataset_immediate_property(self, tools_handler):
+        """A quota change is reported as being in effect now."""
+        result = await tools_handler.call_tool("update_dataset", {
+            "name": "Store/Media",
+            "quota": 1073741824,
+        })
+
+        assert result.type == "text"
+        assert "✅" in result.text
+        assert "In effect now" in result.text
+        assert "quota" in result.text
+        assert "newly written" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_dataset_warns_compression_is_not_retroactive(
+        self, tools_handler
+    ):
+        """Compression must not be reported as if existing data were converted."""
+        result = await tools_handler.call_tool("update_dataset", {
+            "name": "Store/Media",
+            "compression": "ZSTD",
+        })
+
+        assert "newly written data only" in result.text
+        assert "until rewritten" in result.text
+        assert "In effect now" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_dataset_splits_mixed_properties(self, tools_handler):
+        """A mixed call separates what applies now from what does not."""
+        result = await tools_handler.call_tool("update_dataset", {
+            "name": "Store/Media",
+            "quota": 1073741824,
+            "recordsize": "1M",
+        })
+
+        assert "In effect now" in result.text
+        assert "newly written data only" in result.text
+        # The split must put each property on the correct side.
+        immediate, deferred = result.text.split("newly written data only")
+        assert "quota" in immediate
+        assert "recordsize" in deferred
+        assert "recordsize" not in immediate
+
+    @pytest.mark.asyncio
+    async def test_update_dataset_reports_comments_from_user_properties(
+        self, tools_handler
+    ):
+        """comments lives in user_properties; reading the top level gives '?'."""
+        result = await tools_handler.call_tool("update_dataset", {
+            "name": "Store/Media",
+            "comments": "media library",
+        })
+
+        assert "media library" in result.text
+        assert "comments: ?" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_dataset_no_properties_surfaces_error(self, tools_handler):
+        """Calling with nothing to change reaches the caller as an error."""
+        result = await tools_handler.call_tool("update_dataset", {
+            "name": "Store/Media",
+        })
+
+        assert "❌" in result.text
+        assert "No properties given" in result.text
 
     @pytest.mark.asyncio
     async def test_delete_dataset_confirmed(self, tools_handler):

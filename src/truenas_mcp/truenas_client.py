@@ -698,6 +698,51 @@ class TrueNASClient:
 
         return await self._call("pool.dataset.create", payload)
 
+    async def update_dataset(
+        self,
+        name: str,
+        compression: Optional[str] = None,
+        recordsize: Optional[str] = None,
+        quota: Optional[int] = None,
+        refquota: Optional[int] = None,
+        atime: Optional[str] = None,
+        readonly: Optional[str] = None,
+        sync: Optional[str] = None,
+        comments: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Change properties on an existing dataset.
+
+        Unlike create/delete this accepts a pool root dataset, since setting a
+        property at the pool root so children inherit it is legitimate.
+
+        Returns the updated dataset plus the set of properties that were asked
+        for, so the caller can report which ones actually take effect now.
+        """
+        requested = {
+            "compression": compression,
+            "recordsize": recordsize,
+            "quota": quota,
+            "refquota": refquota,
+            "atime": atime,
+            "readonly": readonly,
+            "sync": sync,
+            "comments": comments,
+        }
+        payload = {k: v for k, v in requested.items() if v is not None}
+
+        if not payload:
+            raise ValueError(
+                f"No properties given for '{name}'. "
+                "Pass at least one of: " + ", ".join(sorted(requested))
+            )
+
+        matches = await self._call("pool.dataset.query", [["id", "=", name]])
+        if not matches:
+            raise ValueError(f"Dataset '{name}' does not exist")
+
+        updated = await self._call("pool.dataset.update", name, payload)
+        return {"dataset": updated, "requested": sorted(payload)}
+
     async def delete_dataset(
         self,
         name: str,

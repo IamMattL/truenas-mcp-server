@@ -674,6 +674,57 @@ class MockTrueNASClient:
         self.mock_datasets.append(dataset)
         return dataset
 
+    async def update_dataset(
+        self,
+        name: str,
+        compression: Optional[str] = None,
+        recordsize: Optional[str] = None,
+        quota: Optional[int] = None,
+        refquota: Optional[int] = None,
+        atime: Optional[str] = None,
+        readonly: Optional[str] = None,
+        sync: Optional[str] = None,
+        comments: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Mock update dataset properties."""
+        logger.info("Mock: Updating dataset", dataset=name)
+        await asyncio.sleep(0.2)
+
+        requested = {
+            "compression": compression,
+            "recordsize": recordsize,
+            "quota": quota,
+            "refquota": refquota,
+            "atime": atime,
+            "readonly": readonly,
+            "sync": sync,
+            "comments": comments,
+        }
+        payload = {k: v for k, v in requested.items() if v is not None}
+
+        if not payload:
+            raise ValueError(
+                f"No properties given for '{name}'. "
+                "Pass at least one of: " + ", ".join(sorted(requested))
+            )
+
+        match = next((d for d in self.mock_datasets if d["id"] == name), None)
+        if match is None:
+            raise ValueError(f"Dataset '{name}' does not exist")
+
+        for key, value in payload.items():
+            if key in ("quota", "refquota"):
+                match[key] = {"rawvalue": str(value), "value": str(value)}
+            elif key == "comments":
+                # Mirrors the real API: comments is a ZFS user property, so it
+                # lands in user_properties and the top-level key stays null.
+                match.setdefault("user_properties", {})[key] = {"value": value}
+                match[key] = None
+            else:
+                match[key] = {"value": value}
+
+        return {"dataset": match, "requested": sorted(payload)}
+
     async def delete_dataset(
         self,
         name: str,

@@ -53,6 +53,7 @@ _TOOL_CATEGORIES: Dict[str, str] = {
     "create_snapshot": "storage",
     "delete_snapshot": "storage",
     "create_dataset": "storage",
+    "update_dataset": "storage",
     "delete_dataset": "storage",
     "create_vm": "vm",
     "add_vm_device": "vm",
