@@ -624,6 +624,154 @@ class MockTrueNASClient:
                 return True
         return False
 
+    async def create_dataset(
+        self,
+        name: str,
+        compression: Optional[str] = None,
+        recordsize: Optional[str] = None,
+        quota: Optional[int] = None,
+        atime: Optional[str] = None,
+        share_type: Optional[str] = None,
+        comments: Optional[str] = None,
+        create_ancestors: bool = False,
+    ) -> Dict[str, Any]:
+        """Mock create filesystem dataset."""
+        logger.info("Mock: Creating dataset", dataset=name)
+        await asyncio.sleep(0.2)
+
+        if "/" not in name:
+            raise ValueError(
+                f"Cannot create '{name}': that is a pool name, not a dataset. "
+                "Datasets must be given in pool/dataset form (e.g. 'Services/uptime-kuma'). "
+                "Pools are created from the TrueNAS UI."
+            )
+
+        if any(d["id"] == name for d in self.mock_datasets):
+            raise ValueError(f"Dataset '{name}' already exists")
+
+        parent = name.rsplit("/", 1)[0]
+        parent_exists = any(d["id"] == parent for d in self.mock_datasets)
+        if not parent_exists and not create_ancestors:
+            raise ValueError(
+                f"Parent dataset '{parent}' does not exist. "
+                "Pass create_ancestors=true to create it."
+            )
+
+        dataset = {
+            "id": name,
+            "pool": name.split("/", 1)[0],
+            "name": name,
+            "type": "FILESYSTEM",
+            "used": {"rawvalue": "0"},
+            "available": {"rawvalue": "10995116277760"},
+            "mountpoint": f"/mnt/{name}",
+        }
+        if compression is not None:
+            dataset["compression"] = {"value": compression}
+        if quota is not None:
+            dataset["quota"] = {"rawvalue": str(quota)}
+
+        self.mock_datasets.append(dataset)
+        return dataset
+
+    async def update_dataset(
+        self,
+        name: str,
+        compression: Optional[str] = None,
+        recordsize: Optional[str] = None,
+        quota: Optional[int] = None,
+        refquota: Optional[int] = None,
+        atime: Optional[str] = None,
+        readonly: Optional[str] = None,
+        sync: Optional[str] = None,
+        comments: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Mock update dataset properties."""
+        logger.info("Mock: Updating dataset", dataset=name)
+        await asyncio.sleep(0.2)
+
+        requested = {
+            "compression": compression,
+            "recordsize": recordsize,
+            "quota": quota,
+            "refquota": refquota,
+            "atime": atime,
+            "readonly": readonly,
+            "sync": sync,
+            "comments": comments,
+        }
+        payload = {k: v for k, v in requested.items() if v is not None}
+
+        if not payload:
+            raise ValueError(
+                f"No properties given for '{name}'. "
+                "Pass at least one of: " + ", ".join(sorted(requested))
+            )
+
+        match = next((d for d in self.mock_datasets if d["id"] == name), None)
+        if match is None:
+            raise ValueError(f"Dataset '{name}' does not exist")
+
+        for key, value in payload.items():
+            if key in ("quota", "refquota"):
+                match[key] = {"rawvalue": str(value), "value": str(value)}
+            elif key == "comments":
+                # Mirrors the real API: comments is a ZFS user property, so it
+                # lands in user_properties and the top-level key stays null.
+                match.setdefault("user_properties", {})[key] = {"value": value}
+                match[key] = None
+            else:
+                match[key] = {"value": value}
+
+        return {"dataset": match, "requested": sorted(payload)}
+
+    async def delete_dataset(
+        self,
+        name: str,
+        recursive: bool = False,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """Mock destroy ZFS dataset."""
+        logger.info("Mock: Deleting dataset", dataset=name, recursive=recursive)
+        await asyncio.sleep(0.2)
+
+        if "/" not in name:
+            raise ValueError(
+                f"Refusing to delete '{name}': that is a pool root dataset. "
+                "Datasets must be given in pool/dataset form (e.g. 'Services/coder'). "
+                "Destroy a pool from the TrueNAS UI, not from here."
+            )
+
+        match = next((d for d in self.mock_datasets if d["id"] == name), None)
+        if match is None:
+            raise ValueError(f"Dataset '{name}' does not exist")
+
+        children = [d for d in self.mock_datasets if d["id"].startswith(f"{name}/")]
+        if children and not recursive:
+            child_names = ", ".join(sorted(c["id"] for c in children))
+            raise ValueError(
+                f"Dataset '{name}' has {len(children)} child dataset(s) and "
+                f"recursive is not set: {child_names}. "
+                "Pass recursive=true to destroy them along with the parent."
+            )
+
+        snapshots = [s for s in self.mock_snapshots if s["dataset"] == name]
+
+        doomed = {name} | {c["id"] for c in children}
+        self.mock_datasets = [d for d in self.mock_datasets if d["id"] not in doomed]
+        self.mock_snapshots = [
+            s for s in self.mock_snapshots if s["dataset"] not in doomed
+        ]
+
+        return {
+            "name": name,
+            "used_bytes": int(match.get("used", {}).get("rawvalue", 0) or 0),
+            "children_destroyed": [c["id"] for c in children],
+            "snapshots_destroyed": len(snapshots),
+            "recursive": recursive,
+            "force": force,
+        }
+
     # ── Virtual Machine Management ───────────────────────────────────
 
     async def create_vm(

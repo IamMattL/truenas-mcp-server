@@ -23,10 +23,10 @@ class TestMCPToolsHandler:
 
     @pytest.mark.asyncio
     async def test_list_tools(self, tools_handler):
-        """Test tool listing returns all 28 tools."""
+        """Test tool listing returns every registered tool."""
         tools = await tools_handler.list_tools()
 
-        assert len(tools) == 34
+        assert len(tools) == 37
 
         tool_names = [tool.name for tool in tools]
         expected_tools = [
@@ -51,6 +51,9 @@ class TestMCPToolsHandler:
             "list_snapshots",
             "create_snapshot",
             "delete_snapshot",
+            "create_dataset",
+            "update_dataset",
+            "delete_dataset",
             "create_vm",
             "add_vm_device",
             "query_vm_devices",
@@ -525,6 +528,169 @@ services:
         assert result.type == "text"
         assert "❌" in result.text
         assert "not confirmed" in result.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_create_dataset(self, tools_handler):
+        """Creating a dataset reports its mountpoint."""
+        result = await tools_handler.call_tool("create_dataset", {
+            "name": "Store/Backups",
+        })
+
+        assert result.type == "text"
+        assert "✅" in result.text
+        assert "Store/Backups" in result.text
+        assert "/mnt/Store/Backups" in result.text
+
+    @pytest.mark.asyncio
+    async def test_create_dataset_reports_applied_options(self, tools_handler):
+        """Compression and quota are echoed back so the result is checkable."""
+        result = await tools_handler.call_tool("create_dataset", {
+            "name": "Store/Backups",
+            "compression": "ZSTD",
+            "quota": 1073741824,
+        })
+
+        assert "ZSTD" in result.text
+        assert "Quota" in result.text
+
+    @pytest.mark.asyncio
+    async def test_create_dataset_pool_name_surfaces_error(self, tools_handler):
+        """The pool-name refusal reaches the caller."""
+        result = await tools_handler.call_tool("create_dataset", {
+            "name": "NewPool",
+        })
+
+        assert "❌" in result.text
+        assert "pool name, not a dataset" in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_dataset_immediate_property(self, tools_handler):
+        """A quota change is reported as being in effect now."""
+        result = await tools_handler.call_tool("update_dataset", {
+            "name": "Store/Media",
+            "quota": 1073741824,
+        })
+
+        assert result.type == "text"
+        assert "✅" in result.text
+        assert "In effect now" in result.text
+        assert "quota" in result.text
+        assert "newly written" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_dataset_warns_compression_is_not_retroactive(
+        self, tools_handler
+    ):
+        """Compression must not be reported as if existing data were converted."""
+        result = await tools_handler.call_tool("update_dataset", {
+            "name": "Store/Media",
+            "compression": "ZSTD",
+        })
+
+        assert "newly written data only" in result.text
+        assert "until rewritten" in result.text
+        assert "In effect now" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_dataset_splits_mixed_properties(self, tools_handler):
+        """A mixed call separates what applies now from what does not."""
+        result = await tools_handler.call_tool("update_dataset", {
+            "name": "Store/Media",
+            "quota": 1073741824,
+            "recordsize": "1M",
+        })
+
+        assert "In effect now" in result.text
+        assert "newly written data only" in result.text
+        # The split must put each property on the correct side.
+        immediate, deferred = result.text.split("newly written data only")
+        assert "quota" in immediate
+        assert "recordsize" in deferred
+        assert "recordsize" not in immediate
+
+    @pytest.mark.asyncio
+    async def test_update_dataset_reports_comments_from_user_properties(
+        self, tools_handler
+    ):
+        """comments lives in user_properties; reading the top level gives '?'."""
+        result = await tools_handler.call_tool("update_dataset", {
+            "name": "Store/Media",
+            "comments": "media library",
+        })
+
+        assert "media library" in result.text
+        assert "comments: ?" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_dataset_no_properties_surfaces_error(self, tools_handler):
+        """Calling with nothing to change reaches the caller as an error."""
+        result = await tools_handler.call_tool("update_dataset", {
+            "name": "Store/Media",
+        })
+
+        assert "❌" in result.text
+        assert "No properties given" in result.text
+
+    @pytest.mark.asyncio
+    async def test_delete_dataset_confirmed(self, tools_handler):
+        """Destroying a dataset reports what was reclaimed."""
+        result = await tools_handler.call_tool("delete_dataset", {
+            "name": "Store/Apps",
+            "confirm_deletion": True,
+        })
+
+        assert result.type == "text"
+        assert "✅" in result.text
+        assert "Store/Apps" in result.text
+        assert "Reclaimed" in result.text
+
+    @pytest.mark.asyncio
+    async def test_delete_dataset_not_confirmed(self, tools_handler):
+        """Without confirmation nothing is destroyed."""
+        result = await tools_handler.call_tool("delete_dataset", {
+            "name": "Store/Apps",
+            "confirm_deletion": False,
+        })
+
+        assert result.type == "text"
+        assert "❌" in result.text
+        assert "not confirmed" in result.text.lower()
+
+        datasets = await tools_handler.client.list_datasets()
+        assert "Store/Apps" in [d["id"] for d in datasets]
+
+    @pytest.mark.asyncio
+    async def test_delete_dataset_pool_root_surfaces_error(self, tools_handler):
+        """The pool-root refusal reaches the caller instead of a bare failure."""
+        result = await tools_handler.call_tool("delete_dataset", {
+            "name": "Store",
+            "confirm_deletion": True,
+        })
+
+        assert result.type == "text"
+        assert "❌" in result.text
+        assert "pool root dataset" in result.text
+
+    @pytest.mark.asyncio
+    async def test_delete_dataset_children_error_names_them(self, tools_handler):
+        """A blocked recursive delete tells you which children are in the way."""
+        tools_handler.client.mock_datasets.append({
+            "id": "Store/Apps/nested",
+            "pool": "Store",
+            "name": "Store/Apps/nested",
+            "type": "FILESYSTEM",
+            "used": {"rawvalue": "1024"},
+            "available": {"rawvalue": "1024"},
+            "mountpoint": "/mnt/Store/Apps/nested",
+        })
+
+        result = await tools_handler.call_tool("delete_dataset", {
+            "name": "Store/Apps",
+            "confirm_deletion": True,
+        })
+
+        assert "❌" in result.text
+        assert "Store/Apps/nested" in result.text
 
     # ── System / Pool / Network Tool Tests ────────────────────────────
 

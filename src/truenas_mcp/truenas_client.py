@@ -668,6 +668,151 @@ class TrueNASClient:
         except TrueNASAPIError:
             return False
 
+    async def create_dataset(
+        self,
+        name: str,
+        compression: Optional[str] = None,
+        recordsize: Optional[str] = None,
+        quota: Optional[int] = None,
+        atime: Optional[str] = None,
+        share_type: Optional[str] = None,
+        comments: Optional[str] = None,
+        create_ancestors: bool = False,
+    ) -> Dict[str, Any]:
+        """Create a filesystem dataset.
+
+        Only FILESYSTEM datasets are supported. Zvols take a different shape
+        (volsize, volblocksize, sparse) and belong with the VM tooling.
+
+        Unset options are omitted rather than sent as null, so the dataset
+        inherits from its parent the way the UI would leave it.
+        """
+        if "/" not in name:
+            raise ValueError(
+                f"Cannot create '{name}': that is a pool name, not a dataset. "
+                "Datasets must be given in pool/dataset form (e.g. 'Services/uptime-kuma'). "
+                "Pools are created from the TrueNAS UI."
+            )
+
+        payload: Dict[str, Any] = {"name": name, "type": "FILESYSTEM"}
+        if compression is not None:
+            payload["compression"] = compression
+        if recordsize is not None:
+            payload["recordsize"] = recordsize
+        if quota is not None:
+            payload["quota"] = quota
+        if atime is not None:
+            payload["atime"] = atime
+        if share_type is not None:
+            payload["share_type"] = share_type
+        if comments is not None:
+            payload["comments"] = comments
+        if create_ancestors:
+            payload["create_ancestors"] = True
+
+        return await self._call("pool.dataset.create", payload)
+
+    async def update_dataset(
+        self,
+        name: str,
+        compression: Optional[str] = None,
+        recordsize: Optional[str] = None,
+        quota: Optional[int] = None,
+        refquota: Optional[int] = None,
+        atime: Optional[str] = None,
+        readonly: Optional[str] = None,
+        sync: Optional[str] = None,
+        comments: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Change properties on an existing dataset.
+
+        Unlike create/delete this accepts a pool root dataset, since setting a
+        property at the pool root so children inherit it is legitimate.
+
+        Returns the updated dataset plus the set of properties that were asked
+        for, so the caller can report which ones actually take effect now.
+        """
+        requested = {
+            "compression": compression,
+            "recordsize": recordsize,
+            "quota": quota,
+            "refquota": refquota,
+            "atime": atime,
+            "readonly": readonly,
+            "sync": sync,
+            "comments": comments,
+        }
+        payload = {k: v for k, v in requested.items() if v is not None}
+
+        if not payload:
+            raise ValueError(
+                f"No properties given for '{name}'. "
+                "Pass at least one of: " + ", ".join(sorted(requested))
+            )
+
+        matches = await self._call("pool.dataset.query", [["id", "=", name]])
+        if not matches:
+            raise ValueError(f"Dataset '{name}' does not exist")
+
+        updated = await self._call("pool.dataset.update", name, payload)
+        return {"dataset": updated, "requested": sorted(payload)}
+
+    async def delete_dataset(
+        self,
+        name: str,
+        recursive: bool = False,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """Destroy a ZFS dataset, irreversibly.
+
+        Unlike delete_snapshot this surfaces the API error rather than
+        collapsing it to False: the usual failures ("dataset is busy", "has
+        children") are the whole diagnosis, and a bare False throws them away.
+
+        Returns a summary of what was destroyed so the caller can report it.
+        """
+        if "/" not in name:
+            raise ValueError(
+                f"Refusing to delete '{name}': that is a pool root dataset. "
+                "Datasets must be given in pool/dataset form (e.g. 'Services/coder'). "
+                "Destroy a pool from the TrueNAS UI, not from here."
+            )
+
+        # Confirm it exists and capture its size before it goes.
+        matches = await self._call("pool.dataset.query", [["id", "=", name]])
+        if not matches:
+            raise ValueError(f"Dataset '{name}' does not exist")
+        dataset = matches[0]
+        used = int(dataset.get("used", {}).get("rawvalue", 0) or 0)
+
+        children = await self._call("pool.dataset.query", [["id", "^", f"{name}/"]])
+        snapshots = await self._call("zfs.snapshot.query", [["dataset", "=", name]])
+
+        # The middleware would reject this anyway, but its error does not say
+        # which children are in the way.
+        if children and not recursive:
+            child_names = ", ".join(sorted(c["id"] for c in children))
+            raise ValueError(
+                f"Dataset '{name}' has {len(children)} child dataset(s) and "
+                f"recursive is not set: {child_names}. "
+                "Pass recursive=true to destroy them along with the parent."
+            )
+
+        await self._call(
+            "pool.dataset.delete",
+            name,
+            {"recursive": recursive, "force": force},
+        )
+
+        return {
+            "name": name,
+            "used_bytes": used,
+            "children_destroyed": [c["id"] for c in children],
+            "snapshots_destroyed": len(snapshots),
+            "recursive": recursive,
+            "force": force,
+        }
+
     # ── Virtual Machine Management ───────────────────────────────────
 
     async def create_vm(

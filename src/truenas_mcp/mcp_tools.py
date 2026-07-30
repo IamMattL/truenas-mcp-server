@@ -480,6 +480,200 @@ class MCPToolsHandler:
                 },
             ),
 
+            Tool(
+                name="create_dataset",
+                description=(
+                    "Create a ZFS filesystem dataset. Unset options are inherited "
+                    "from the parent dataset. Zvols are not supported."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": (
+                                "Dataset to create, in pool/dataset form "
+                                "(e.g. 'Services/uptime-kuma')"
+                            ),
+                        },
+                        "compression": {
+                            "type": "string",
+                            "description": (
+                                "Compression algorithm. Common values: LZ4 (default "
+                                "on most pools), ZSTD (better ratio), ZSTD-FAST, OFF. "
+                                "Omit to inherit from the parent."
+                            ),
+                        },
+                        "recordsize": {
+                            "type": "string",
+                            "enum": [
+                                "512", "512B", "1K", "2K", "4K", "8K", "16K", "32K",
+                                "64K", "128K", "256K", "512K", "1M", "2M", "4M",
+                                "8M", "16M",
+                            ],
+                            "description": (
+                                "Record size. 128K suits general use, 1M suits large "
+                                "media files, 16K suits databases."
+                            ),
+                        },
+                        "quota": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Quota in bytes. Omit for no quota.",
+                        },
+                        "atime": {
+                            "type": "string",
+                            "enum": ["ON", "OFF", "INHERIT"],
+                            "description": (
+                                "Update access times on read. OFF reduces writes on "
+                                "read-heavy datasets."
+                            ),
+                        },
+                        "share_type": {
+                            "type": "string",
+                            "enum": ["GENERIC", "MULTIPROTOCOL", "NFS", "SMB", "APPS"],
+                            "description": (
+                                "Preset ACLs for the intended use. SMB for Windows "
+                                "shares, APPS for app data, GENERIC otherwise."
+                            ),
+                        },
+                        "comments": {
+                            "type": "string",
+                            "description": "Description shown in the TrueNAS UI",
+                        },
+                        "create_ancestors": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": (
+                                "Create missing parent datasets rather than failing"
+                            ),
+                        },
+                    },
+                    "required": ["name"],
+                    "additionalProperties": False,
+                },
+            ),
+
+            Tool(
+                name="update_dataset",
+                description=(
+                    "Change properties on an existing dataset. Note that "
+                    "compression and recordsize apply to newly written data only: "
+                    "existing data keeps whatever it was written with, and is only "
+                    "converted by rewriting it. Quotas take effect immediately. "
+                    "share_type, casesensitivity, encryption and the name are fixed "
+                    "at creation and cannot be changed here."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": (
+                                "Dataset to update (e.g. 'Store/Media'). A pool root "
+                                "is allowed, so children can inherit the change."
+                            ),
+                        },
+                        "compression": {
+                            "type": "string",
+                            "description": (
+                                "Compression algorithm. Applies to new writes only. "
+                                "Common values: LZ4, ZSTD, ZSTD-FAST, OFF, INHERIT."
+                            ),
+                        },
+                        "recordsize": {
+                            "type": "string",
+                            "enum": [
+                                "512", "512B", "1K", "2K", "4K", "8K", "16K", "32K",
+                                "64K", "128K", "256K", "512K", "1M", "2M", "4M",
+                                "8M", "16M",
+                            ],
+                            "description": "Record size. Applies to new writes only.",
+                        },
+                        "quota": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": (
+                                "Quota in bytes, including child datasets and "
+                                "snapshots. 0 removes the quota. Effective immediately."
+                            ),
+                        },
+                        "refquota": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": (
+                                "Quota in bytes for this dataset's own data, excluding "
+                                "snapshots and children. 0 removes it."
+                            ),
+                        },
+                        "atime": {
+                            "type": "string",
+                            "enum": ["ON", "OFF", "INHERIT"],
+                            "description": "Update access times on read",
+                        },
+                        "readonly": {
+                            "type": "string",
+                            "enum": ["ON", "OFF", "INHERIT"],
+                            "description": "Make the dataset read-only",
+                        },
+                        "sync": {
+                            "type": "string",
+                            "enum": ["STANDARD", "ALWAYS", "DISABLED", "INHERIT"],
+                            "description": (
+                                "Synchronous write behaviour. DISABLED risks data loss "
+                                "on power failure."
+                            ),
+                        },
+                        "comments": {
+                            "type": "string",
+                            "description": "Description shown in the TrueNAS UI",
+                        },
+                    },
+                    "required": ["name"],
+                    "additionalProperties": False,
+                },
+            ),
+
+            Tool(
+                name="delete_dataset",
+                description=(
+                    "Destroy a ZFS dataset and everything in it. Irreversible: "
+                    "the data and all its snapshots are gone immediately, with no "
+                    "recycle bin and no undo. Refuses pool root datasets."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": (
+                                "Dataset to destroy, in pool/dataset form "
+                                "(e.g. 'Services/coder')"
+                            ),
+                        },
+                        "confirm_deletion": {
+                            "type": "boolean",
+                            "description": "Safety confirmation for destructive operation",
+                        },
+                        "recursive": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": (
+                                "Also destroy child datasets. Required if the "
+                                "dataset has any children."
+                            ),
+                        },
+                        "force": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Destroy even if the dataset is busy (in use)",
+                        },
+                    },
+                    "required": ["name", "confirm_deletion"],
+                    "additionalProperties": False,
+                },
+            ),
+
             # ── Virtual Machine Management ────────────────────────────
             Tool(
                 name="create_vm",
@@ -914,6 +1108,39 @@ class MCPToolsHandler:
                     dataset=arguments["dataset"],
                     name=arguments["name"],
                     recursive=arguments.get("recursive", False),
+                )
+
+            elif name == "create_dataset":
+                return await self._create_dataset(
+                    dataset_name=arguments["name"],
+                    compression=arguments.get("compression"),
+                    recordsize=arguments.get("recordsize"),
+                    quota=arguments.get("quota"),
+                    atime=arguments.get("atime"),
+                    share_type=arguments.get("share_type"),
+                    comments=arguments.get("comments"),
+                    create_ancestors=arguments.get("create_ancestors", False),
+                )
+
+            elif name == "update_dataset":
+                return await self._update_dataset(
+                    dataset_name=arguments["name"],
+                    compression=arguments.get("compression"),
+                    recordsize=arguments.get("recordsize"),
+                    quota=arguments.get("quota"),
+                    refquota=arguments.get("refquota"),
+                    atime=arguments.get("atime"),
+                    readonly=arguments.get("readonly"),
+                    sync=arguments.get("sync"),
+                    comments=arguments.get("comments"),
+                )
+
+            elif name == "delete_dataset":
+                return await self._delete_dataset(
+                    dataset_name=arguments["name"],
+                    confirm_deletion=arguments["confirm_deletion"],
+                    recursive=arguments.get("recursive", False),
+                    force=arguments.get("force", False),
                 )
 
             elif name == "delete_snapshot":
@@ -1519,6 +1746,152 @@ class MCPToolsHandler:
                 type="text",
                 text=f"❌ Failed to delete snapshot '{snapshot_name}'",
             )
+
+    async def _create_dataset(
+        self,
+        dataset_name: str,
+        compression: Optional[str],
+        recordsize: Optional[str],
+        quota: Optional[int],
+        atime: Optional[str],
+        share_type: Optional[str],
+        comments: Optional[str],
+        create_ancestors: bool,
+    ) -> TextContent:
+        """Create a ZFS filesystem dataset."""
+        result = await self.client.create_dataset(
+            dataset_name,
+            compression=compression,
+            recordsize=recordsize,
+            quota=quota,
+            atime=atime,
+            share_type=share_type,
+            comments=comments,
+            create_ancestors=create_ancestors,
+        )
+
+        created = result.get("name", result.get("id", dataset_name))
+        lines = [f"✅ Created dataset '{created}'"]
+        lines.append(f"   Mountpoint: {result.get('mountpoint', f'/mnt/{created}')}")
+
+        # Report what the dataset actually ended up with, which for inherited
+        # options is not necessarily what was asked for.
+        applied = result.get("compression", {})
+        if isinstance(applied, dict) and applied.get("value"):
+            lines.append(f"   Compression: {applied['value']}")
+
+        applied = result.get("recordsize", {})
+        if isinstance(applied, dict) and applied.get("value"):
+            lines.append(f"   Record size: {applied['value']}")
+
+        if quota:
+            lines.append(f"   Quota: {_format_bytes(quota)}")
+
+        return TextContent(type="text", text="\n".join(lines))
+
+    # ZFS applies these to newly written blocks only. Existing data keeps
+    # whatever it was written with until it is rewritten, so reporting these
+    # as simply "updated" would overstate what the call did.
+    _FUTURE_WRITES_ONLY = frozenset({"compression", "recordsize"})
+
+    async def _update_dataset(
+        self,
+        dataset_name: str,
+        compression: Optional[str],
+        recordsize: Optional[str],
+        quota: Optional[int],
+        refquota: Optional[int],
+        atime: Optional[str],
+        readonly: Optional[str],
+        sync: Optional[str],
+        comments: Optional[str],
+    ) -> TextContent:
+        """Update properties on an existing dataset."""
+        result = await self.client.update_dataset(
+            dataset_name,
+            compression=compression,
+            recordsize=recordsize,
+            quota=quota,
+            refquota=refquota,
+            atime=atime,
+            readonly=readonly,
+            sync=sync,
+            comments=comments,
+        )
+
+        dataset = result["dataset"]
+        requested = result["requested"]
+
+        def stored(prop: str) -> str:
+            """Report what TrueNAS stored, not what was asked for.
+
+            `comments` is a ZFS user property, so it comes back under
+            user_properties while the top-level `comments` key stays null.
+            Reading only the top level reports a successful change as "?".
+            """
+            raw = dataset.get(prop)
+            if not isinstance(raw, dict) or raw.get("value") is None:
+                raw = (dataset.get("user_properties") or {}).get(prop)
+            if isinstance(raw, dict):
+                value = raw.get("value", raw.get("rawvalue"))
+                return str(value) if value is not None else "?"
+            return str(raw) if raw is not None else "?"
+
+        immediate = [p for p in requested if p not in self._FUTURE_WRITES_ONLY]
+        deferred = [p for p in requested if p in self._FUTURE_WRITES_ONLY]
+
+        lines = [f"✅ Updated dataset '{dataset_name}'"]
+
+        if immediate:
+            lines.append("   In effect now:")
+            for prop in immediate:
+                lines.append(f"     {prop}: {stored(prop)}")
+
+        if deferred:
+            lines.append("   Applies to newly written data only:")
+            for prop in deferred:
+                lines.append(f"     {prop}: {stored(prop)}")
+            lines.append(
+                "   Existing data keeps its current layout until rewritten. "
+                "Copying a dataset to convert it also costs its size again in "
+                "snapshots until those expire."
+            )
+
+        return TextContent(type="text", text="\n".join(lines))
+
+    async def _delete_dataset(
+        self,
+        dataset_name: str,
+        confirm_deletion: bool,
+        recursive: bool,
+        force: bool,
+    ) -> TextContent:
+        """Destroy a ZFS dataset."""
+        if not confirm_deletion:
+            return TextContent(
+                type="text",
+                text="❌ Deletion not confirmed. Set confirm_deletion=true to proceed.",
+            )
+
+        result = await self.client.delete_dataset(dataset_name, recursive, force)
+
+        lines = [f"✅ Destroyed dataset '{result['name']}'"]
+        lines.append(f"   Reclaimed: {_format_bytes(result['used_bytes'])}")
+
+        children = result.get("children_destroyed") or []
+        if children:
+            lines.append(f"   Child datasets destroyed: {len(children)}")
+            for child in children:
+                lines.append(f"     - {child}")
+
+        snapshots = result.get("snapshots_destroyed", 0)
+        if snapshots:
+            lines.append(f"   Snapshots destroyed: {snapshots}")
+
+        if force:
+            lines.append("   (forced: dataset was in use)")
+
+        return TextContent(type="text", text="\n".join(lines))
 
     # ── Virtual Machine Handlers ─────────────────────────────────────
 
