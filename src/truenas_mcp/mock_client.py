@@ -624,6 +624,56 @@ class MockTrueNASClient:
                 return True
         return False
 
+    async def create_dataset(
+        self,
+        name: str,
+        compression: Optional[str] = None,
+        recordsize: Optional[str] = None,
+        quota: Optional[int] = None,
+        atime: Optional[str] = None,
+        share_type: Optional[str] = None,
+        comments: Optional[str] = None,
+        create_ancestors: bool = False,
+    ) -> Dict[str, Any]:
+        """Mock create filesystem dataset."""
+        logger.info("Mock: Creating dataset", dataset=name)
+        await asyncio.sleep(0.2)
+
+        if "/" not in name:
+            raise ValueError(
+                f"Cannot create '{name}': that is a pool name, not a dataset. "
+                "Datasets must be given in pool/dataset form (e.g. 'Services/uptime-kuma'). "
+                "Pools are created from the TrueNAS UI."
+            )
+
+        if any(d["id"] == name for d in self.mock_datasets):
+            raise ValueError(f"Dataset '{name}' already exists")
+
+        parent = name.rsplit("/", 1)[0]
+        parent_exists = any(d["id"] == parent for d in self.mock_datasets)
+        if not parent_exists and not create_ancestors:
+            raise ValueError(
+                f"Parent dataset '{parent}' does not exist. "
+                "Pass create_ancestors=true to create it."
+            )
+
+        dataset = {
+            "id": name,
+            "pool": name.split("/", 1)[0],
+            "name": name,
+            "type": "FILESYSTEM",
+            "used": {"rawvalue": "0"},
+            "available": {"rawvalue": "10995116277760"},
+            "mountpoint": f"/mnt/{name}",
+        }
+        if compression is not None:
+            dataset["compression"] = {"value": compression}
+        if quota is not None:
+            dataset["quota"] = {"rawvalue": str(quota)}
+
+        self.mock_datasets.append(dataset)
+        return dataset
+
     async def delete_dataset(
         self,
         name: str,

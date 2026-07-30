@@ -253,6 +253,7 @@ below for an alternative mode that collapses them into two meta-tools.
 - **`list_snapshots`** - List ZFS snapshots with size information
 - **`create_snapshot`** - Create a ZFS snapshot for backup or rollback
 - **`delete_snapshot`** - Delete a ZFS snapshot
+- **`create_dataset`** - Create a ZFS filesystem dataset (unset options inherit from the parent; zvols not supported)
 - **`delete_dataset`** - Destroy a ZFS dataset and everything in it (irreversible; refuses pool roots, and requires `recursive` when the dataset has children)
 
 ### System Information

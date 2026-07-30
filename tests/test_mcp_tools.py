@@ -26,7 +26,7 @@ class TestMCPToolsHandler:
         """Test tool listing returns every registered tool."""
         tools = await tools_handler.list_tools()
 
-        assert len(tools) == 35
+        assert len(tools) == 36
 
         tool_names = [tool.name for tool in tools]
         expected_tools = [
@@ -51,6 +51,7 @@ class TestMCPToolsHandler:
             "list_snapshots",
             "create_snapshot",
             "delete_snapshot",
+            "create_dataset",
             "delete_dataset",
             "create_vm",
             "add_vm_device",
@@ -526,6 +527,40 @@ services:
         assert result.type == "text"
         assert "❌" in result.text
         assert "not confirmed" in result.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_create_dataset(self, tools_handler):
+        """Creating a dataset reports its mountpoint."""
+        result = await tools_handler.call_tool("create_dataset", {
+            "name": "Store/Backups",
+        })
+
+        assert result.type == "text"
+        assert "✅" in result.text
+        assert "Store/Backups" in result.text
+        assert "/mnt/Store/Backups" in result.text
+
+    @pytest.mark.asyncio
+    async def test_create_dataset_reports_applied_options(self, tools_handler):
+        """Compression and quota are echoed back so the result is checkable."""
+        result = await tools_handler.call_tool("create_dataset", {
+            "name": "Store/Backups",
+            "compression": "ZSTD",
+            "quota": 1073741824,
+        })
+
+        assert "ZSTD" in result.text
+        assert "Quota" in result.text
+
+    @pytest.mark.asyncio
+    async def test_create_dataset_pool_name_surfaces_error(self, tools_handler):
+        """The pool-name refusal reaches the caller."""
+        result = await tools_handler.call_tool("create_dataset", {
+            "name": "NewPool",
+        })
+
+        assert "❌" in result.text
+        assert "pool name, not a dataset" in result.text
 
     @pytest.mark.asyncio
     async def test_delete_dataset_confirmed(self, tools_handler):

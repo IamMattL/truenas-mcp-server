@@ -481,6 +481,80 @@ class MCPToolsHandler:
             ),
 
             Tool(
+                name="create_dataset",
+                description=(
+                    "Create a ZFS filesystem dataset. Unset options are inherited "
+                    "from the parent dataset. Zvols are not supported."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": (
+                                "Dataset to create, in pool/dataset form "
+                                "(e.g. 'Services/uptime-kuma')"
+                            ),
+                        },
+                        "compression": {
+                            "type": "string",
+                            "description": (
+                                "Compression algorithm. Common values: LZ4 (default "
+                                "on most pools), ZSTD (better ratio), ZSTD-FAST, OFF. "
+                                "Omit to inherit from the parent."
+                            ),
+                        },
+                        "recordsize": {
+                            "type": "string",
+                            "enum": [
+                                "512", "512B", "1K", "2K", "4K", "8K", "16K", "32K",
+                                "64K", "128K", "256K", "512K", "1M", "2M", "4M",
+                                "8M", "16M",
+                            ],
+                            "description": (
+                                "Record size. 128K suits general use, 1M suits large "
+                                "media files, 16K suits databases."
+                            ),
+                        },
+                        "quota": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Quota in bytes. Omit for no quota.",
+                        },
+                        "atime": {
+                            "type": "string",
+                            "enum": ["ON", "OFF", "INHERIT"],
+                            "description": (
+                                "Update access times on read. OFF reduces writes on "
+                                "read-heavy datasets."
+                            ),
+                        },
+                        "share_type": {
+                            "type": "string",
+                            "enum": ["GENERIC", "MULTIPROTOCOL", "NFS", "SMB", "APPS"],
+                            "description": (
+                                "Preset ACLs for the intended use. SMB for Windows "
+                                "shares, APPS for app data, GENERIC otherwise."
+                            ),
+                        },
+                        "comments": {
+                            "type": "string",
+                            "description": "Description shown in the TrueNAS UI",
+                        },
+                        "create_ancestors": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": (
+                                "Create missing parent datasets rather than failing"
+                            ),
+                        },
+                    },
+                    "required": ["name"],
+                    "additionalProperties": False,
+                },
+            ),
+
+            Tool(
                 name="delete_dataset",
                 description=(
                     "Destroy a ZFS dataset and everything in it. Irreversible: "
@@ -954,6 +1028,18 @@ class MCPToolsHandler:
                     dataset=arguments["dataset"],
                     name=arguments["name"],
                     recursive=arguments.get("recursive", False),
+                )
+
+            elif name == "create_dataset":
+                return await self._create_dataset(
+                    dataset_name=arguments["name"],
+                    compression=arguments.get("compression"),
+                    recordsize=arguments.get("recordsize"),
+                    quota=arguments.get("quota"),
+                    atime=arguments.get("atime"),
+                    share_type=arguments.get("share_type"),
+                    comments=arguments.get("comments"),
+                    create_ancestors=arguments.get("create_ancestors", False),
                 )
 
             elif name == "delete_dataset":
@@ -1567,6 +1653,48 @@ class MCPToolsHandler:
                 type="text",
                 text=f"❌ Failed to delete snapshot '{snapshot_name}'",
             )
+
+    async def _create_dataset(
+        self,
+        dataset_name: str,
+        compression: Optional[str],
+        recordsize: Optional[str],
+        quota: Optional[int],
+        atime: Optional[str],
+        share_type: Optional[str],
+        comments: Optional[str],
+        create_ancestors: bool,
+    ) -> TextContent:
+        """Create a ZFS filesystem dataset."""
+        result = await self.client.create_dataset(
+            dataset_name,
+            compression=compression,
+            recordsize=recordsize,
+            quota=quota,
+            atime=atime,
+            share_type=share_type,
+            comments=comments,
+            create_ancestors=create_ancestors,
+        )
+
+        created = result.get("name", result.get("id", dataset_name))
+        lines = [f"✅ Created dataset '{created}'"]
+        lines.append(f"   Mountpoint: {result.get('mountpoint', f'/mnt/{created}')}")
+
+        # Report what the dataset actually ended up with, which for inherited
+        # options is not necessarily what was asked for.
+        applied = result.get("compression", {})
+        if isinstance(applied, dict) and applied.get("value"):
+            lines.append(f"   Compression: {applied['value']}")
+
+        applied = result.get("recordsize", {})
+        if isinstance(applied, dict) and applied.get("value"):
+            lines.append(f"   Record size: {applied['value']}")
+
+        if quota:
+            lines.append(f"   Quota: {_format_bytes(quota)}")
+
+        return TextContent(type="text", text="\n".join(lines))
 
     async def _delete_dataset(
         self,

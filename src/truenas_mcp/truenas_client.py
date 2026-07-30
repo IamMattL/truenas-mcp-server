@@ -654,6 +654,50 @@ class TrueNASClient:
         except TrueNASAPIError:
             return False
 
+    async def create_dataset(
+        self,
+        name: str,
+        compression: Optional[str] = None,
+        recordsize: Optional[str] = None,
+        quota: Optional[int] = None,
+        atime: Optional[str] = None,
+        share_type: Optional[str] = None,
+        comments: Optional[str] = None,
+        create_ancestors: bool = False,
+    ) -> Dict[str, Any]:
+        """Create a filesystem dataset.
+
+        Only FILESYSTEM datasets are supported. Zvols take a different shape
+        (volsize, volblocksize, sparse) and belong with the VM tooling.
+
+        Unset options are omitted rather than sent as null, so the dataset
+        inherits from its parent the way the UI would leave it.
+        """
+        if "/" not in name:
+            raise ValueError(
+                f"Cannot create '{name}': that is a pool name, not a dataset. "
+                "Datasets must be given in pool/dataset form (e.g. 'Services/uptime-kuma'). "
+                "Pools are created from the TrueNAS UI."
+            )
+
+        payload: Dict[str, Any] = {"name": name, "type": "FILESYSTEM"}
+        if compression is not None:
+            payload["compression"] = compression
+        if recordsize is not None:
+            payload["recordsize"] = recordsize
+        if quota is not None:
+            payload["quota"] = quota
+        if atime is not None:
+            payload["atime"] = atime
+        if share_type is not None:
+            payload["share_type"] = share_type
+        if comments is not None:
+            payload["comments"] = comments
+        if create_ancestors:
+            payload["create_ancestors"] = True
+
+        return await self._call("pool.dataset.create", payload)
+
     async def delete_dataset(
         self,
         name: str,

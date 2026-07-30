@@ -371,6 +371,60 @@ services:
         assert result is False
 
     @pytest.mark.asyncio
+    async def test_create_dataset(self, mock_client):
+        """Creating a dataset returns it and adds it to the listing."""
+        result = await mock_client.create_dataset("Store/Backups")
+
+        assert result["name"] == "Store/Backups"
+        assert result["mountpoint"] == "/mnt/Store/Backups"
+
+        listed = [d["id"] for d in await mock_client.list_datasets()]
+        assert "Store/Backups" in listed
+
+    @pytest.mark.asyncio
+    async def test_create_dataset_with_options(self, mock_client):
+        """Options that were passed are applied rather than dropped."""
+        result = await mock_client.create_dataset(
+            "Store/Backups", compression="ZSTD", quota=1073741824,
+        )
+
+        assert result["compression"]["value"] == "ZSTD"
+        assert result["quota"]["rawvalue"] == "1073741824"
+
+    @pytest.mark.asyncio
+    async def test_create_dataset_refuses_pool_name(self, mock_client):
+        """A bare pool name is refused; pools are not created here."""
+        with pytest.raises(ValueError, match="pool name, not a dataset"):
+            await mock_client.create_dataset("NewPool")
+
+    @pytest.mark.asyncio
+    async def test_create_dataset_duplicate(self, mock_client):
+        """Creating over an existing dataset is an error, not a silent no-op."""
+        with pytest.raises(ValueError, match="already exists"):
+            await mock_client.create_dataset("Store/Media")
+
+    @pytest.mark.asyncio
+    async def test_create_dataset_missing_parent(self, mock_client):
+        """A missing parent fails unless create_ancestors is set."""
+        with pytest.raises(ValueError, match="create_ancestors"):
+            await mock_client.create_dataset("Store/Missing/Child")
+
+        result = await mock_client.create_dataset(
+            "Store/Missing/Child", create_ancestors=True,
+        )
+        assert result["name"] == "Store/Missing/Child"
+
+    @pytest.mark.asyncio
+    async def test_create_then_delete_roundtrip(self, mock_client):
+        """A dataset created here can be destroyed by delete_dataset."""
+        await mock_client.create_dataset("Store/Temp")
+        result = await mock_client.delete_dataset("Store/Temp")
+
+        assert result["name"] == "Store/Temp"
+        listed = [d["id"] for d in await mock_client.list_datasets()]
+        assert "Store/Temp" not in listed
+
+    @pytest.mark.asyncio
     async def test_delete_dataset_leaf(self, mock_client):
         """Deleting a childless dataset reports its size and removes it."""
         result = await mock_client.delete_dataset("Store/Apps")
