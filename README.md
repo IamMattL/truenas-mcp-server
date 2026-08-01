@@ -74,7 +74,7 @@ Create a dedicated service account on TrueNAS for MCP access:
 | `TRUENAS_SSL_VERIFY` | Verify SSL certificates (`true`/`false`) | `true` | No |
 | `DEBUG_MODE` | Enable debug logging (`true`/`false`) | `false` | No |
 | `MOCK_TRUENAS` | Use mock client for development (`true`/`false`) | `false` | No |
-| `MCP_DISCOVERY_MODE` | Expose tools via dynamic discovery (`search_tools` + `execute_tool`) instead of registering all 33 upfront | `false` | No |
+| `MCP_DISCOVERY_MODE` | Expose tools via dynamic discovery (`search_tools` + `execute_tool`) instead of registering all 41 upfront | `false` | No |
 
 ### Testing the Server
 
@@ -217,7 +217,7 @@ SCRAM mechanisms are not available in the current TrueNAS API.
 
 ## Available MCP Tools
 
-The server provides 33 MCP tools across six categories. By default each tool is
+The server provides 41 MCP tools across seven categories. By default each tool is
 registered upfront, but see [Dynamic Tool Discovery](#dynamic-tool-discovery)
 below for an alternative mode that collapses them into two meta-tools.
 
@@ -257,6 +257,34 @@ below for an alternative mode that collapses them into two meta-tools.
 - **`update_dataset`** - Change dataset properties (compression and recordsize apply to new writes only; quotas take effect immediately)
 - **`delete_dataset`** - Destroy a ZFS dataset and everything in it (irreversible; refuses pool roots, and requires `recursive` when the dataset has children)
 
+### NFS Shares
+- **`list_nfs_shares`** - List NFS shares with the hosts and networks each is exported to
+- **`create_nfs_share`** - Export a path over NFS (takes a mountpoint like `/mnt/Store/Media`, not a dataset name)
+- **`update_nfs_share`** - Change a share, found by id or by the path it exports (`hosts` and `networks` replace the stored lists rather than adding to them)
+- **`delete_nfs_share`** - Remove an export, leaving the data untouched
+
+Three things these tools report that the middleware does not, because each one
+fails silently rather than loudly:
+
+- An export with no `hosts` and no `networks` is open to every host that can
+  reach the server. That is a valid configuration, so it is a warning on the
+  result rather than a refusal.
+- Without `maproot_user`, NFS squashes a client's root to `nobody`, and writes
+  then fail on permissions with nothing in the error mentioning the export.
+  Writable shares with no mapping say so.
+- A share created while the NFS service is stopped exports nothing, and the
+  client sees "connection refused". `create_nfs_share` checks the service and
+  says if it is down.
+
+`update_nfs_share` reports `hosts` and `networks` changes as a before and after
+with the revoked entries named, because those fields replace rather than append:
+authorising a second client by passing only its address would otherwise quietly
+revoke the first.
+
+SMB and iSCSI shares are not covered. On 25.10 an SMB share is a discriminated
+union keyed on `purpose`, with a different `options` shape per variant, so it
+needs modelling properly rather than bolting onto this.
+
 ### System Information
 - **`get_system_info`** - Get system info (hostname, version, uptime, CPU, RAM)
 - **`get_storage_pools`** - Get storage pool health, capacity, and scrub status
@@ -264,10 +292,10 @@ below for an alternative mode that collapses them into two meta-tools.
 
 ## Dynamic Tool Discovery
 
-Set `MCP_DISCOVERY_MODE=true` to replace the full 33-tool registry with two
+Set `MCP_DISCOVERY_MODE=true` to replace the full 41-tool registry with two
 meta-tools. This mirrors the pattern Cloudflare adopted after observing that
 default MCP deployments burn a large fraction of the context window just
-describing what's available (~9.4k tokens for a 33-tool registry like this
+describing what's available (~9.4k tokens for a 41-tool registry like this
 one).
 
 With discovery mode on, the server advertises only:
@@ -284,7 +312,7 @@ With discovery mode on, the server advertises only:
 
 - ✅ Baseline `tools/list` payload shrinks by ~94%, and stays flat as new
   tools are added.
-- ✅ All 33 tools remain available — nothing is removed, only surfaced
+- ✅ All 41 tools remain available — nothing is removed, only surfaced
   lazily.
 - ⚠️ Models that expect to see tools directly in `tools/list` need to be
   guided (via system prompt) to call `search_tools` first.

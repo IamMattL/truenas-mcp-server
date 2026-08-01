@@ -55,6 +55,10 @@ _TOOL_CATEGORIES: Dict[str, str] = {
     "create_dataset": "storage",
     "update_dataset": "storage",
     "delete_dataset": "storage",
+    "list_nfs_shares": "sharing",
+    "create_nfs_share": "sharing",
+    "update_nfs_share": "sharing",
+    "delete_nfs_share": "sharing",
     "create_vm": "vm",
     "add_vm_device": "vm",
     "query_vm_devices": "vm",
@@ -75,7 +79,8 @@ SEARCH_TOOL = Tool(
     name="search_tools",
     description=(
         "Discover TrueNAS tools on demand. Provide a keyword `query`, a "
-        "`category` (connection, app, filesystem, storage, vm, system), or an "
+        "`category` (connection, app, filesystem, storage, sharing, vm, "
+        "system), or an "
         "exact tool `name` to retrieve its full JSON schema. With no arguments "
         "returns every tool grouped by category. Use this before `execute_tool`."
     ),
@@ -93,6 +98,7 @@ SEARCH_TOOL = Tool(
                     "app",
                     "filesystem",
                     "storage",
+                    "sharing",
                     "vm",
                     "system",
                 ],

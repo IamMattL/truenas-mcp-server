@@ -100,6 +100,31 @@ class MockTrueNASClient:
             },
         ]
 
+        # NFS share mock data. Mirrors the field set sharing.nfs.query really
+        # returns, including the empty-string (not null) map* defaults, so a
+        # handler that mishandles those cannot pass here and fail live.
+        self.mock_nfs_shares = [
+            {
+                "id": 1,
+                "path": "/mnt/Store/Media",
+                "aliases": [],
+                "comment": "media",
+                "networks": [],
+                "hosts": ["192.168.10.129"],
+                "ro": False,
+                "maproot_user": "root",
+                "maproot_group": "root",
+                "mapall_user": "",
+                "mapall_group": "",
+                "security": [],
+                "enabled": True,
+                "locked": False,
+                "expose_snapshots": False,
+            },
+        ]
+        self._next_nfs_share_id = 2
+        self.mock_nfs_running = True
+
         # System info mock data
         self.mock_system_info = {
             "hostname": "truenas",
@@ -770,6 +795,217 @@ class MockTrueNASClient:
             "snapshots_destroyed": len(snapshots),
             "recursive": recursive,
             "force": force,
+        }
+
+    # ── NFS Share Tools ───────────────────────────────────────────────
+
+    _NFS_LIST_FIELDS = ("hosts", "networks")
+
+    def _validate_nfs_path(self, path: str) -> str:
+        """Mock export path check. Mirrors the real client's message."""
+        path = path.rstrip("/") or "/"
+        if not path.startswith("/mnt/"):
+            suggestion = f"/mnt/{path.lstrip('/')}"
+            raise ValueError(
+                f"NFS export path must be a mountpoint under /mnt, got '{path}'. "
+                f"Every other tool here takes a dataset name like 'Store/Media', "
+                f"but a share takes the mountpoint, so this is probably "
+                f"'{suggestion}'."
+            )
+        return path
+
+    async def list_nfs_shares(
+        self,
+        path: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Mock list NFS shares."""
+        logger.info("Mock: Listing NFS shares", path=path)
+        await asyncio.sleep(0.1)
+
+        if path:
+            wanted = path.rstrip("/")
+            return [s for s in self.mock_nfs_shares if s["path"] == wanted]
+        return list(self.mock_nfs_shares)
+
+    async def _resolve_nfs_share(
+        self,
+        share_id: Optional[int] = None,
+        path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Mock resolve one NFS share by id or path."""
+        if (share_id is None) == (path is None):
+            raise ValueError(
+                "Pass exactly one of 'id' or 'path' to identify the share. "
+                "Call list_nfs_shares to see both."
+            )
+
+        if share_id is not None:
+            match = next(
+                (s for s in self.mock_nfs_shares if s["id"] == share_id), None
+            )
+            if match is None:
+                raise ValueError(
+                    f"No NFS share with id {share_id}. "
+                    "Call list_nfs_shares to see the current ids."
+                )
+            return match
+
+        wanted = path.rstrip("/")
+        match = next((s for s in self.mock_nfs_shares if s["path"] == wanted), None)
+        if match is None:
+            raise ValueError(
+                f"No NFS share exports '{wanted}'. "
+                "Call list_nfs_shares to see what is exported."
+            )
+        return match
+
+    async def create_nfs_share(
+        self,
+        path: str,
+        hosts: Optional[List[str]] = None,
+        networks: Optional[List[str]] = None,
+        comment: Optional[str] = None,
+        ro: bool = False,
+        maproot_user: Optional[str] = None,
+        maproot_group: Optional[str] = None,
+        mapall_user: Optional[str] = None,
+        mapall_group: Optional[str] = None,
+        enabled: bool = True,
+    ) -> Dict[str, Any]:
+        """Mock create NFS share."""
+        logger.info("Mock: Creating NFS share", path=path)
+        await asyncio.sleep(0.2)
+
+        path = self._validate_nfs_path(path)
+
+        if (maproot_user or maproot_group) and (mapall_user or mapall_group):
+            raise ValueError(
+                "maproot_* and mapall_* cannot both be set: maproot remaps only "
+                "the client's root user, mapall remaps every user. Choose one."
+            )
+
+        existing = next((s for s in self.mock_nfs_shares if s["path"] == path), None)
+        if existing:
+            raise ValueError(
+                f"'{path}' is already exported by NFS share id {existing['id']}. "
+                "Use update_nfs_share to change it rather than creating a second "
+                "export of the same path."
+            )
+
+        share = {
+            "id": self._next_nfs_share_id,
+            "path": path,
+            "aliases": [],
+            "comment": comment or "",
+            "networks": list(networks or []),
+            "hosts": list(hosts or []),
+            "ro": ro,
+            # Unset map* fields come back as empty strings, not null.
+            "maproot_user": maproot_user or "",
+            "maproot_group": maproot_group or "",
+            "mapall_user": mapall_user or "",
+            "mapall_group": mapall_group or "",
+            "security": [],
+            "enabled": enabled,
+            "locked": False,
+            "expose_snapshots": False,
+        }
+        self._next_nfs_share_id += 1
+        self.mock_nfs_shares.append(share)
+
+        return {
+            "share": share,
+            "service_running": self.mock_nfs_running,
+            "unrestricted": not hosts and not networks,
+        }
+
+    async def update_nfs_share(
+        self,
+        share_id: Optional[int] = None,
+        path: Optional[str] = None,
+        new_path: Optional[str] = None,
+        hosts: Optional[List[str]] = None,
+        networks: Optional[List[str]] = None,
+        comment: Optional[str] = None,
+        ro: Optional[bool] = None,
+        maproot_user: Optional[str] = None,
+        maproot_group: Optional[str] = None,
+        mapall_user: Optional[str] = None,
+        mapall_group: Optional[str] = None,
+        enabled: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Mock update NFS share."""
+        logger.info("Mock: Updating NFS share", share_id=share_id, path=path)
+        await asyncio.sleep(0.2)
+
+        share = await self._resolve_nfs_share(share_id, path)
+
+        requested = {
+            "path": self._validate_nfs_path(new_path) if new_path else None,
+            "hosts": hosts,
+            "networks": networks,
+            "comment": comment,
+            "ro": ro,
+            "maproot_user": maproot_user,
+            "maproot_group": maproot_group,
+            "mapall_user": mapall_user,
+            "mapall_group": mapall_group,
+            "enabled": enabled,
+        }
+        payload = {k: v for k, v in requested.items() if v is not None}
+
+        if not payload:
+            raise ValueError(
+                f"No changes given for NFS share id {share['id']}. "
+                "Pass at least one of: " + ", ".join(sorted(requested))
+            )
+
+        merged = {**share, **payload}
+        if (merged.get("maproot_user") or merged.get("maproot_group")) and (
+            merged.get("mapall_user") or merged.get("mapall_group")
+        ):
+            raise ValueError(
+                f"NFS share id {share['id']} would end up with both maproot_* and "
+                "mapall_* set, which the middleware rejects. Clear one by passing "
+                "it as an empty string."
+            )
+
+        before = {f: list(share.get(f) or []) for f in self._NFS_LIST_FIELDS}
+        share.update(payload)
+
+        replaced = {
+            field: {"before": before[field], "after": share.get(field) or []}
+            for field in self._NFS_LIST_FIELDS
+            if field in payload and before[field] != (share.get(field) or [])
+        }
+
+        return {
+            "share": share,
+            "requested": sorted(payload),
+            "replaced_lists": replaced,
+            "unrestricted": not (share.get("hosts") or share.get("networks")),
+        }
+
+    async def delete_nfs_share(
+        self,
+        share_id: Optional[int] = None,
+        path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Mock delete NFS share."""
+        logger.info("Mock: Deleting NFS share", share_id=share_id, path=path)
+        await asyncio.sleep(0.2)
+
+        share = await self._resolve_nfs_share(share_id, path)
+        self.mock_nfs_shares = [
+            s for s in self.mock_nfs_shares if s["id"] != share["id"]
+        ]
+
+        return {
+            "id": share["id"],
+            "path": share.get("path"),
+            "hosts": share.get("hosts") or [],
+            "networks": share.get("networks") or [],
+            "comment": share.get("comment") or "",
         }
 
     # ── Virtual Machine Management ───────────────────────────────────

@@ -26,7 +26,7 @@ class TestMCPToolsHandler:
         """Test tool listing returns every registered tool."""
         tools = await tools_handler.list_tools()
 
-        assert len(tools) == 37
+        assert len(tools) == 41
 
         tool_names = [tool.name for tool in tools]
         expected_tools = [
@@ -54,6 +54,10 @@ class TestMCPToolsHandler:
             "create_dataset",
             "update_dataset",
             "delete_dataset",
+            "list_nfs_shares",
+            "create_nfs_share",
+            "update_nfs_share",
+            "delete_nfs_share",
             "create_vm",
             "add_vm_device",
             "query_vm_devices",
@@ -691,6 +695,211 @@ services:
 
         assert "❌" in result.text
         assert "Store/Apps/nested" in result.text
+
+    # ── NFS Share Tool Tests ──────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_list_nfs_shares(self, tools_handler):
+        """Test listing NFS shares."""
+        result = await tools_handler.call_tool("list_nfs_shares", {})
+
+        assert result.type == "text"
+        assert "NFS Shares" in result.text
+        assert "/mnt/Store/Media" in result.text
+        assert "192.168.10.129" in result.text
+
+    @pytest.mark.asyncio
+    async def test_list_nfs_shares_filtered(self, tools_handler):
+        """Test filtering the share list by path."""
+        result = await tools_handler.call_tool("list_nfs_shares", {
+            "path": "/mnt/Store/Apps",
+        })
+
+        assert "No NFS shares found" in result.text
+
+    @pytest.mark.asyncio
+    async def test_list_nfs_shares_reports_mapping(self, tools_handler):
+        """The root mapping is what makes a share writable, so it is shown."""
+        result = await tools_handler.call_tool("list_nfs_shares", {})
+        assert "client root mapped to root:root" in result.text
+
+    @pytest.mark.asyncio
+    async def test_create_nfs_share(self, tools_handler):
+        """Test creating a share."""
+        result = await tools_handler.call_tool("create_nfs_share", {
+            "path": "/mnt/Store/Apps",
+            "hosts": ["192.168.10.129"],
+            "maproot_user": "root",
+        })
+
+        assert "✅" in result.text
+        assert "/mnt/Store/Apps" in result.text
+        assert "192.168.10.129" in result.text
+
+    @pytest.mark.asyncio
+    async def test_create_nfs_share_suggests_mount_command(self, tools_handler):
+        """The mount command is the obvious next step, so it is offered."""
+        result = await tools_handler.call_tool("create_nfs_share", {
+            "path": "/mnt/Store/Apps",
+            "hosts": ["192.168.10.129"],
+        })
+
+        assert "mount -t nfs" in result.text
+        assert ":/mnt/Store/Apps" in result.text
+
+    @pytest.mark.asyncio
+    async def test_create_nfs_share_warns_when_open_to_everyone(self, tools_handler):
+        """No hosts and no networks exports to the whole network."""
+        result = await tools_handler.call_tool("create_nfs_share", {
+            "path": "/mnt/Store/Apps",
+        })
+
+        assert "✅" in result.text
+        assert "⚠️" in result.text
+        assert "every host" in result.text
+
+    @pytest.mark.asyncio
+    async def test_create_nfs_share_warns_about_root_squash(self, tools_handler):
+        """A writable share with no maproot silently squashes root to nobody."""
+        result = await tools_handler.call_tool("create_nfs_share", {
+            "path": "/mnt/Store/Apps",
+            "hosts": ["192.168.10.129"],
+        })
+
+        assert "nobody" in result.text
+
+    @pytest.mark.asyncio
+    async def test_create_nfs_share_no_root_squash_warning_when_mapped(
+        self, tools_handler
+    ):
+        """The warning is conditional, not boilerplate."""
+        result = await tools_handler.call_tool("create_nfs_share", {
+            "path": "/mnt/Store/Apps",
+            "hosts": ["192.168.10.129"],
+            "maproot_user": "root",
+        })
+
+        assert "nobody" not in result.text
+
+    @pytest.mark.asyncio
+    async def test_create_nfs_share_warns_when_service_stopped(self, tools_handler):
+        """A share on a stopped service exports nothing."""
+        tools_handler.client.mock_nfs_running = False
+
+        result = await tools_handler.call_tool("create_nfs_share", {
+            "path": "/mnt/Store/Apps",
+            "hosts": ["192.168.10.129"],
+        })
+
+        assert "NFS service is not running" in result.text
+
+    @pytest.mark.asyncio
+    async def test_create_nfs_share_dataset_name_surfaces_error(self, tools_handler):
+        """Passing a dataset name is caught and corrected."""
+        result = await tools_handler.call_tool("create_nfs_share", {
+            "path": "Store/Apps",
+        })
+
+        assert "❌" in result.text
+        assert "/mnt/Store/Apps" in result.text
+
+    @pytest.mark.asyncio
+    async def test_create_nfs_share_duplicate_surfaces_error(self, tools_handler):
+        """Re-exporting the same path points at the existing share."""
+        result = await tools_handler.call_tool("create_nfs_share", {
+            "path": "/mnt/Store/Media",
+        })
+
+        assert "❌" in result.text
+        assert "update_nfs_share" in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_nfs_share_by_path(self, tools_handler):
+        """Test updating a share by the path it exports."""
+        result = await tools_handler.call_tool("update_nfs_share", {
+            "path": "/mnt/Store/Media",
+            "comment": "changed",
+        })
+
+        assert "✅" in result.text
+        assert "changed" in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_nfs_share_spells_out_revoked_hosts(self, tools_handler):
+        """Replacing the host list must name what lost access."""
+        result = await tools_handler.call_tool("update_nfs_share", {
+            "id": 1,
+            "hosts": ["192.168.10.130"],
+        })
+
+        assert "hosts replaced" in result.text
+        assert "no longer allowed: 192.168.10.129" in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_nfs_share_warns_on_emptying_hosts(self, tools_handler):
+        """Clearing the host list opens the share to everyone."""
+        result = await tools_handler.call_tool("update_nfs_share", {
+            "id": 1,
+            "hosts": [],
+            "comment": "opened up",
+        })
+
+        assert "⚠️" in result.text
+        assert "every host" in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_nfs_share_no_changes_surfaces_error(self, tools_handler):
+        """An update with nothing to change is refused, not silently accepted."""
+        result = await tools_handler.call_tool("update_nfs_share", {"id": 1})
+
+        assert "❌" in result.text
+        assert "No changes given" in result.text
+
+    @pytest.mark.asyncio
+    async def test_update_nfs_share_ambiguous_identifier(self, tools_handler):
+        """Passing both id and path is refused."""
+        result = await tools_handler.call_tool("update_nfs_share", {
+            "id": 1,
+            "path": "/mnt/Store/Media",
+            "ro": True,
+        })
+
+        assert "❌" in result.text
+        assert "exactly one" in result.text
+
+    @pytest.mark.asyncio
+    async def test_delete_nfs_share_confirmed(self, tools_handler):
+        """Test removing an export."""
+        result = await tools_handler.call_tool("delete_nfs_share", {
+            "id": 1,
+            "confirm_deletion": True,
+        })
+
+        assert "✅" in result.text
+        assert "/mnt/Store/Media" in result.text
+        assert "data is untouched" in result.text
+
+    @pytest.mark.asyncio
+    async def test_delete_nfs_share_not_confirmed(self, tools_handler):
+        """Without confirmation nothing is removed."""
+        result = await tools_handler.call_tool("delete_nfs_share", {
+            "id": 1,
+            "confirm_deletion": False,
+        })
+
+        assert "❌" in result.text
+        assert len(tools_handler.client.mock_nfs_shares) == 1
+
+    @pytest.mark.asyncio
+    async def test_delete_nfs_share_nonexistent_surfaces_error(self, tools_handler):
+        """Test removing a share that is not there."""
+        result = await tools_handler.call_tool("delete_nfs_share", {
+            "id": 99,
+            "confirm_deletion": True,
+        })
+
+        assert "❌" in result.text
+        assert "list_nfs_shares" in result.text
 
     # ── System / Pool / Network Tool Tests ────────────────────────────
 
