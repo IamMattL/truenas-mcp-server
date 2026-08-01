@@ -674,6 +674,227 @@ class MCPToolsHandler:
                 },
             ),
 
+            # ── NFS Shares ────────────────────────────────────────────
+            Tool(
+                name="list_nfs_shares",
+                description=(
+                    "List NFS shares with the hosts and networks each is "
+                    "exported to."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": (
+                                "Filter to the share exporting this path "
+                                "(e.g. '/mnt/Store/Media'). Optional."
+                            ),
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+
+            Tool(
+                name="create_nfs_share",
+                description=(
+                    "Export a path over NFS. Note that the path is a mountpoint "
+                    "under /mnt, not a dataset name. Leaving both hosts and "
+                    "networks empty exports to every host that can reach the "
+                    "server, which is rarely intended. If clients will write as "
+                    "root, set maproot_user, or their writes arrive as 'nobody' "
+                    "and fail on permissions."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": (
+                                "Mountpoint to export, e.g. '/mnt/Store/Media'. "
+                                "Not a dataset name."
+                            ),
+                        },
+                        "hosts": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "IPs or hostnames allowed to mount this share. "
+                                "Empty means all hosts are allowed."
+                            ),
+                        },
+                        "networks": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Networks allowed to mount, in CIDR form "
+                                "(e.g. '192.168.10.0/24'). Empty means all."
+                            ),
+                        },
+                        "comment": {
+                            "type": "string",
+                            "description": "Description shown in the TrueNAS UI",
+                        },
+                        "ro": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "Export read-only",
+                        },
+                        "maproot_user": {
+                            "type": "string",
+                            "description": (
+                                "Remap the client's root user to this user, "
+                                "usually 'root'. Needed for clients that write as "
+                                "root, such as Proxmox backups. Cannot be combined "
+                                "with mapall_*."
+                            ),
+                        },
+                        "maproot_group": {
+                            "type": "string",
+                            "description": "Remap the client's root group to this group",
+                        },
+                        "mapall_user": {
+                            "type": "string",
+                            "description": (
+                                "Remap every client user to this user. Cannot be "
+                                "combined with maproot_*."
+                            ),
+                        },
+                        "mapall_group": {
+                            "type": "string",
+                            "description": "Remap every client group to this group",
+                        },
+                        "enabled": {
+                            "type": "boolean",
+                            "default": True,
+                            "description": "Whether the share is active",
+                        },
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            ),
+
+            Tool(
+                name="update_nfs_share",
+                description=(
+                    "Change an existing NFS share, identified by id or by the "
+                    "path it exports. Important: hosts and networks REPLACE the "
+                    "stored lists rather than adding to them, so to authorise an "
+                    "extra client you must pass the existing entries as well as "
+                    "the new one. Call list_nfs_shares first to see them."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "integer",
+                            "description": "Share id. Pass this or path, not both.",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": (
+                                "Path the share currently exports, used to find "
+                                "it. Pass this or id, not both."
+                            ),
+                        },
+                        "new_path": {
+                            "type": "string",
+                            "description": (
+                                "Change which path is exported. Clients with the "
+                                "old path mounted will need to remount."
+                            ),
+                        },
+                        "hosts": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Replaces the allowed host list entirely. Include "
+                                "existing entries to keep them; an empty list "
+                                "opens the share to all hosts."
+                            ),
+                        },
+                        "networks": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Replaces the allowed network list entirely, in "
+                                "CIDR form."
+                            ),
+                        },
+                        "comment": {
+                            "type": "string",
+                            "description": "Description shown in the TrueNAS UI",
+                        },
+                        "ro": {
+                            "type": "boolean",
+                            "description": "Export read-only",
+                        },
+                        "maproot_user": {
+                            "type": "string",
+                            "description": (
+                                "Remap the client's root user. Pass an empty "
+                                "string to clear it."
+                            ),
+                        },
+                        "maproot_group": {
+                            "type": "string",
+                            "description": "Remap the client's root group",
+                        },
+                        "mapall_user": {
+                            "type": "string",
+                            "description": "Remap every client user",
+                        },
+                        "mapall_group": {
+                            "type": "string",
+                            "description": "Remap every client group",
+                        },
+                        "enabled": {
+                            "type": "boolean",
+                            "description": (
+                                "Whether the share is active. Disabling unexports "
+                                "it while keeping the configuration."
+                            ),
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+
+            Tool(
+                name="delete_nfs_share",
+                description=(
+                    "Remove an NFS export, identified by id or by the path it "
+                    "exports. This unexports the path and does NOT delete the "
+                    "data underneath. Any client with it currently mounted will "
+                    "hang on that mount rather than get a clean error, so "
+                    "unmount clients first."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "integer",
+                            "description": "Share id. Pass this or path, not both.",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": (
+                                "Path the share exports (e.g. '/mnt/Store/Media'). "
+                                "Pass this or id, not both."
+                            ),
+                        },
+                        "confirm_deletion": {
+                            "type": "boolean",
+                            "description": "Safety confirmation for destructive operation",
+                        },
+                    },
+                    "required": ["confirm_deletion"],
+                    "additionalProperties": False,
+                },
+            ),
+
             # ── Virtual Machine Management ────────────────────────────
             Tool(
                 name="create_vm",
@@ -1146,6 +1367,49 @@ class MCPToolsHandler:
             elif name == "delete_snapshot":
                 return await self._delete_snapshot(
                     snapshot_name=arguments["snapshot_name"],
+                    confirm_deletion=arguments["confirm_deletion"],
+                )
+
+            # NFS Shares
+            elif name == "list_nfs_shares":
+                return await self._list_nfs_shares(
+                    path=arguments.get("path"),
+                )
+
+            elif name == "create_nfs_share":
+                return await self._create_nfs_share(
+                    path=arguments["path"],
+                    hosts=arguments.get("hosts"),
+                    networks=arguments.get("networks"),
+                    comment=arguments.get("comment"),
+                    ro=arguments.get("ro", False),
+                    maproot_user=arguments.get("maproot_user"),
+                    maproot_group=arguments.get("maproot_group"),
+                    mapall_user=arguments.get("mapall_user"),
+                    mapall_group=arguments.get("mapall_group"),
+                    enabled=arguments.get("enabled", True),
+                )
+
+            elif name == "update_nfs_share":
+                return await self._update_nfs_share(
+                    share_id=arguments.get("id"),
+                    path=arguments.get("path"),
+                    new_path=arguments.get("new_path"),
+                    hosts=arguments.get("hosts"),
+                    networks=arguments.get("networks"),
+                    comment=arguments.get("comment"),
+                    ro=arguments.get("ro"),
+                    maproot_user=arguments.get("maproot_user"),
+                    maproot_group=arguments.get("maproot_group"),
+                    mapall_user=arguments.get("mapall_user"),
+                    mapall_group=arguments.get("mapall_group"),
+                    enabled=arguments.get("enabled"),
+                )
+
+            elif name == "delete_nfs_share":
+                return await self._delete_nfs_share(
+                    share_id=arguments.get("id"),
+                    path=arguments.get("path"),
                     confirm_deletion=arguments["confirm_deletion"],
                 )
 
@@ -1890,6 +2154,226 @@ class MCPToolsHandler:
 
         if force:
             lines.append("   (forced: dataset was in use)")
+
+        return TextContent(type="text", text="\n".join(lines))
+
+    # ── NFS Share Handlers ───────────────────────────────────────────
+
+    @staticmethod
+    def _nfs_allowed(share: Dict[str, Any]) -> str:
+        """Who may mount this share, in one line."""
+        allowed = (share.get("hosts") or []) + (share.get("networks") or [])
+        return ", ".join(allowed) if allowed else "everyone"
+
+    @staticmethod
+    def _nfs_mapping(share: Dict[str, Any]) -> Optional[str]:
+        """How the share remaps client identity, or None if it does not."""
+        def pair(user: str, group: str) -> str:
+            return f"{share.get(user) or '-'}:{share.get(group) or '-'}"
+
+        if share.get("mapall_user") or share.get("mapall_group"):
+            return f"all users mapped to {pair('mapall_user', 'mapall_group')}"
+        if share.get("maproot_user") or share.get("maproot_group"):
+            return f"client root mapped to {pair('maproot_user', 'maproot_group')}"
+        return None
+
+    def _nfs_warnings(
+        self,
+        share: Dict[str, Any],
+        service_running: Optional[bool] = None,
+    ) -> List[str]:
+        """Conditions that make a share not do what was probably intended."""
+        warnings = []
+
+        if not (share.get("hosts") or share.get("networks")):
+            warnings.append(
+                "Exported to every host that can reach the server. Set hosts or "
+                "networks to restrict it."
+            )
+
+        if service_running is False:
+            warnings.append(
+                "The NFS service is not running, so nothing is exported yet and "
+                "clients will see 'connection refused'. Start it under "
+                "System > Services."
+            )
+
+        if not share.get("enabled", True):
+            warnings.append("The share is disabled, so it is not exported.")
+
+        # Without a mapping, NFS squashes the client's root to nobody. Writes
+        # then fail on permissions with nothing in the error pointing at the
+        # export, which is how the pve-backup share went wrong.
+        if not share.get("ro") and self._nfs_mapping(share) is None:
+            warnings.append(
+                "No maproot_user is set, so a client writing as root writes as "
+                "'nobody' and will fail on permissions. That matters for hosts "
+                "like Proxmox that back up as root, and not otherwise."
+            )
+
+        return warnings
+
+    async def _list_nfs_shares(self, path: Optional[str]) -> TextContent:
+        """List NFS shares."""
+        shares = await self.client.list_nfs_shares(path)
+
+        if not shares:
+            label = f" exporting '{path}'" if path else ""
+            return TextContent(type="text", text=f"No NFS shares found{label}")
+
+        lines = [f"NFS Shares ({len(shares)})\n"]
+        for share in shares:
+            state = "" if share.get("enabled", True) else "  [disabled]"
+            lines.append(f"  [{share.get('id')}] {share.get('path')}{state}")
+            lines.append(f"      Allowed:  {self._nfs_allowed(share)}")
+            lines.append(
+                f"      Access:   {'read-only' if share.get('ro') else 'read-write'}"
+            )
+
+            mapping = self._nfs_mapping(share)
+            if mapping:
+                lines.append(f"      Mapping:  {mapping}")
+            if share.get("comment"):
+                lines.append(f"      Comment:  {share['comment']}")
+            lines.append("")
+
+        return TextContent(type="text", text="\n".join(lines).rstrip())
+
+    async def _create_nfs_share(
+        self,
+        path: str,
+        hosts: Optional[List[str]],
+        networks: Optional[List[str]],
+        comment: Optional[str],
+        ro: bool,
+        maproot_user: Optional[str],
+        maproot_group: Optional[str],
+        mapall_user: Optional[str],
+        mapall_group: Optional[str],
+        enabled: bool,
+    ) -> TextContent:
+        """Export a path over NFS."""
+        result = await self.client.create_nfs_share(
+            path,
+            hosts=hosts,
+            networks=networks,
+            comment=comment,
+            ro=ro,
+            maproot_user=maproot_user,
+            maproot_group=maproot_group,
+            mapall_user=mapall_user,
+            mapall_group=mapall_group,
+            enabled=enabled,
+        )
+
+        share = result["share"]
+        exported = share.get("path", path)
+
+        lines = [f"✅ Created NFS share id {share.get('id')} for '{exported}'"]
+        lines.append(f"   Allowed: {self._nfs_allowed(share)}")
+        lines.append(
+            f"   Access:  {'read-only' if share.get('ro') else 'read-write'}"
+        )
+
+        mapping = self._nfs_mapping(share)
+        if mapping:
+            lines.append(f"   Mapping: {mapping}")
+
+        host = getattr(self.client, "host", None) or "truenas"
+        lines.append(f"   Mount with: mount -t nfs {host}:{exported} /mnt/point")
+
+        for warning in self._nfs_warnings(share, result.get("service_running")):
+            lines.append(f"   ⚠️  {warning}")
+
+        return TextContent(type="text", text="\n".join(lines))
+
+    async def _update_nfs_share(
+        self,
+        share_id: Optional[int],
+        path: Optional[str],
+        new_path: Optional[str],
+        hosts: Optional[List[str]],
+        networks: Optional[List[str]],
+        comment: Optional[str],
+        ro: Optional[bool],
+        maproot_user: Optional[str],
+        maproot_group: Optional[str],
+        mapall_user: Optional[str],
+        mapall_group: Optional[str],
+        enabled: Optional[bool],
+    ) -> TextContent:
+        """Change an existing NFS share."""
+        result = await self.client.update_nfs_share(
+            share_id=share_id,
+            path=path,
+            new_path=new_path,
+            hosts=hosts,
+            networks=networks,
+            comment=comment,
+            ro=ro,
+            maproot_user=maproot_user,
+            maproot_group=maproot_group,
+            mapall_user=mapall_user,
+            mapall_group=mapall_group,
+            enabled=enabled,
+        )
+
+        share = result["share"]
+        lines = [
+            f"✅ Updated NFS share id {share.get('id')} ('{share.get('path')}')"
+        ]
+
+        for prop in result["requested"]:
+            if prop in result["replaced_lists"]:
+                continue
+            value = share.get(prop)
+            if isinstance(value, list):
+                value = ", ".join(value) if value else "(empty)"
+            lines.append(f"   {prop}: {value}")
+
+        # Spelled out because these replace rather than append, and the failure
+        # mode is silent: adding one client IP revokes every other one.
+        for field, change in result["replaced_lists"].items():
+            before = ", ".join(change["before"]) or "(empty, meaning all)"
+            after = ", ".join(change["after"]) or "(empty, meaning all)"
+            lines.append(f"   {field} replaced:")
+            lines.append(f"     was: {before}")
+            lines.append(f"     now: {after}")
+
+            revoked = [e for e in change["before"] if e not in change["after"]]
+            if revoked:
+                lines.append(f"     no longer allowed: {', '.join(revoked)}")
+
+        for warning in self._nfs_warnings(share):
+            lines.append(f"   ⚠️  {warning}")
+
+        return TextContent(type="text", text="\n".join(lines))
+
+    async def _delete_nfs_share(
+        self,
+        share_id: Optional[int],
+        path: Optional[str],
+        confirm_deletion: bool,
+    ) -> TextContent:
+        """Remove an NFS export."""
+        if not confirm_deletion:
+            return TextContent(
+                type="text",
+                text="❌ Deletion not confirmed. Set confirm_deletion=true to proceed.",
+            )
+
+        result = await self.client.delete_nfs_share(share_id=share_id, path=path)
+
+        lines = [
+            f"✅ Deleted NFS share id {result['id']} for '{result['path']}'",
+            "   The data is untouched; only the export is gone.",
+        ]
+
+        allowed = result["hosts"] + result["networks"]
+        if allowed:
+            lines.append(f"   Was exported to: {', '.join(allowed)}")
+        if result["comment"]:
+            lines.append(f"   Comment was: {result['comment']}")
 
         return TextContent(type="text", text="\n".join(lines))
 

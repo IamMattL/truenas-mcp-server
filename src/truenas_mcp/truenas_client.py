@@ -813,6 +813,242 @@ class TrueNASClient:
             "force": force,
         }
 
+    # ── NFS Share Tools ───────────────────────────────────────────────
+
+    # Fields the create/update tools expose. `aliases` is documented "IGNORED,
+    # for now" by the middleware itself, `expose_snapshots` needs an Enterprise
+    # licence, and `security` only means anything with Kerberos configured, so
+    # all three are left out rather than offered and quietly ineffective.
+    _NFS_LIST_FIELDS = ("hosts", "networks")
+
+    def _validate_nfs_path(self, path: str) -> str:
+        """Check an export path is a mountpoint, not a dataset name."""
+        path = path.rstrip("/") or "/"
+
+        if not path.startswith("/mnt/"):
+            suggestion = f"/mnt/{path.lstrip('/')}"
+            raise ValueError(
+                f"NFS export path must be a mountpoint under /mnt, got '{path}'. "
+                f"Every other tool here takes a dataset name like 'Store/Media', "
+                f"but a share takes the mountpoint, so this is probably "
+                f"'{suggestion}'."
+            )
+
+        return path
+
+    async def _nfs_service_running(self) -> Optional[bool]:
+        """Whether the NFS service is up, or None if that could not be read.
+
+        A share on a stopped service exports nothing, and the client sees
+        "connection refused" rather than anything mentioning the share, so this
+        is worth reporting alongside a successful create.
+        """
+        try:
+            services = await self._call("service.query", [["service", "=", "nfs"]])
+        except TrueNASAPIError:
+            return None
+        if not services:
+            return None
+        return services[0].get("state") == "RUNNING"
+
+    async def list_nfs_shares(
+        self,
+        path: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List NFS shares, optionally filtered by exported path."""
+        if path:
+            return await self._call(
+                "sharing.nfs.query",
+                [["path", "=", path.rstrip("/")]],
+            )
+        return await self._call("sharing.nfs.query")
+
+    async def _resolve_nfs_share(
+        self,
+        share_id: Optional[int] = None,
+        path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Find exactly one NFS share by id or by exported path."""
+        if (share_id is None) == (path is None):
+            raise ValueError(
+                "Pass exactly one of 'id' or 'path' to identify the share. "
+                "Call list_nfs_shares to see both."
+            )
+
+        if share_id is not None:
+            matches = await self._call("sharing.nfs.query", [["id", "=", share_id]])
+            if not matches:
+                raise ValueError(
+                    f"No NFS share with id {share_id}. "
+                    "Call list_nfs_shares to see the current ids."
+                )
+            return matches[0]
+
+        wanted = path.rstrip("/")
+        matches = await self._call("sharing.nfs.query", [["path", "=", wanted]])
+        if not matches:
+            raise ValueError(
+                f"No NFS share exports '{wanted}'. "
+                "Call list_nfs_shares to see what is exported."
+            )
+        return matches[0]
+
+    async def create_nfs_share(
+        self,
+        path: str,
+        hosts: Optional[List[str]] = None,
+        networks: Optional[List[str]] = None,
+        comment: Optional[str] = None,
+        ro: bool = False,
+        maproot_user: Optional[str] = None,
+        maproot_group: Optional[str] = None,
+        mapall_user: Optional[str] = None,
+        mapall_group: Optional[str] = None,
+        enabled: bool = True,
+    ) -> Dict[str, Any]:
+        """Export a path over NFS.
+
+        Returns the created share plus the context needed to report it
+        honestly: whether the NFS service is actually running, and whether the
+        export ended up open to every host on the network.
+        """
+        path = self._validate_nfs_path(path)
+
+        # maproot and mapall are mutually exclusive. The middleware rejects the
+        # combination, but its error does not explain that they are two answers
+        # to the same question.
+        if (maproot_user or maproot_group) and (mapall_user or mapall_group):
+            raise ValueError(
+                "maproot_* and mapall_* cannot both be set: maproot remaps only "
+                "the client's root user, mapall remaps every user. Choose one."
+            )
+
+        existing = await self._call("sharing.nfs.query", [["path", "=", path]])
+        if existing:
+            raise ValueError(
+                f"'{path}' is already exported by NFS share id {existing[0]['id']}. "
+                "Use update_nfs_share to change it rather than creating a second "
+                "export of the same path."
+            )
+
+        payload: Dict[str, Any] = {"path": path, "ro": ro, "enabled": enabled}
+        if hosts:
+            payload["hosts"] = hosts
+        if networks:
+            payload["networks"] = networks
+        if comment is not None:
+            payload["comment"] = comment
+        if maproot_user is not None:
+            payload["maproot_user"] = maproot_user
+        if maproot_group is not None:
+            payload["maproot_group"] = maproot_group
+        if mapall_user is not None:
+            payload["mapall_user"] = mapall_user
+        if mapall_group is not None:
+            payload["mapall_group"] = mapall_group
+
+        share = await self._call("sharing.nfs.create", payload)
+
+        return {
+            "share": share,
+            "service_running": await self._nfs_service_running(),
+            "unrestricted": not hosts and not networks,
+        }
+
+    async def update_nfs_share(
+        self,
+        share_id: Optional[int] = None,
+        path: Optional[str] = None,
+        new_path: Optional[str] = None,
+        hosts: Optional[List[str]] = None,
+        networks: Optional[List[str]] = None,
+        comment: Optional[str] = None,
+        ro: Optional[bool] = None,
+        maproot_user: Optional[str] = None,
+        maproot_group: Optional[str] = None,
+        mapall_user: Optional[str] = None,
+        mapall_group: Optional[str] = None,
+        enabled: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Change an existing NFS share.
+
+        `hosts` and `networks` REPLACE the stored lists rather than adding to
+        them, so the before and after of both are returned: passing one new
+        client IP would otherwise silently revoke every existing one.
+        """
+        share = await self._resolve_nfs_share(share_id, path)
+
+        requested = {
+            "path": self._validate_nfs_path(new_path) if new_path else None,
+            "hosts": hosts,
+            "networks": networks,
+            "comment": comment,
+            "ro": ro,
+            "maproot_user": maproot_user,
+            "maproot_group": maproot_group,
+            "mapall_user": mapall_user,
+            "mapall_group": mapall_group,
+            "enabled": enabled,
+        }
+        payload = {k: v for k, v in requested.items() if v is not None}
+
+        if not payload:
+            raise ValueError(
+                f"No changes given for NFS share id {share['id']}. "
+                "Pass at least one of: " + ", ".join(sorted(requested))
+            )
+
+        # The same either/or as create, but checked against the merged result:
+        # setting mapall on a share that already has maproot is the way this
+        # goes wrong in practice.
+        merged = {**share, **payload}
+        if (merged.get("maproot_user") or merged.get("maproot_group")) and (
+            merged.get("mapall_user") or merged.get("mapall_group")
+        ):
+            raise ValueError(
+                f"NFS share id {share['id']} would end up with both maproot_* and "
+                "mapall_* set, which the middleware rejects. Clear one by passing "
+                "it as an empty string."
+            )
+
+        updated = await self._call("sharing.nfs.update", share["id"], payload)
+
+        # Only report a list as changed if it actually moved, so an update that
+        # passes hosts unchanged does not read as a revocation.
+        replaced = {
+            field: {"before": share.get(field) or [], "after": updated.get(field) or []}
+            for field in self._NFS_LIST_FIELDS
+            if field in payload
+            and (share.get(field) or []) != (updated.get(field) or [])
+        }
+
+        return {
+            "share": updated,
+            "requested": sorted(payload),
+            "replaced_lists": replaced,
+            "unrestricted": not (updated.get("hosts") or updated.get("networks")),
+        }
+
+    async def delete_nfs_share(
+        self,
+        share_id: Optional[int] = None,
+        path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Remove an NFS export.
+
+        This unexports a path; it does not touch the data underneath. Returns
+        the share as it was so the caller can report, and recreate, what went.
+        """
+        share = await self._resolve_nfs_share(share_id, path)
+        await self._call("sharing.nfs.delete", share["id"])
+        return {
+            "id": share["id"],
+            "path": share.get("path"),
+            "hosts": share.get("hosts") or [],
+            "networks": share.get("networks") or [],
+            "comment": share.get("comment") or "",
+        }
+
     # ── Virtual Machine Management ───────────────────────────────────
 
     async def create_vm(

@@ -51,7 +51,7 @@ class TestDiscoveryHandler:
         result = await discovery_handler.call_tool("search_tools", {})
         payload = json.loads(result.text)
 
-        assert payload["total_matches"] == 37
+        assert payload["total_matches"] == 41
         assert payload["returned"] <= 25
         assert payload["truncated"] is True
         # Every returned summary must have name/category/description.

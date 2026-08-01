@@ -538,6 +538,162 @@ services:
         assert "Store/Apps" not in remaining
         assert "Store/Apps/nested" not in remaining
 
+    # ── NFS Share Tests ───────────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_list_nfs_shares_all(self, mock_client):
+        """Test listing all NFS shares."""
+        shares = await mock_client.list_nfs_shares()
+        assert len(shares) == 1
+        assert shares[0]["path"] == "/mnt/Store/Media"
+
+    @pytest.mark.asyncio
+    async def test_list_nfs_shares_filtered_by_path(self, mock_client):
+        """Test filtering shares by exported path."""
+        assert len(await mock_client.list_nfs_shares(path="/mnt/Store/Media")) == 1
+        assert await mock_client.list_nfs_shares(path="/mnt/Store/Apps") == []
+
+    @pytest.mark.asyncio
+    async def test_create_nfs_share(self, mock_client):
+        """Test exporting a path."""
+        result = await mock_client.create_nfs_share(
+            "/mnt/Store/Apps",
+            hosts=["192.168.10.129"],
+            comment="apps",
+        )
+
+        assert result["share"]["path"] == "/mnt/Store/Apps"
+        assert result["share"]["hosts"] == ["192.168.10.129"]
+        assert result["unrestricted"] is False
+        assert len(await mock_client.list_nfs_shares()) == 2
+
+    @pytest.mark.asyncio
+    async def test_create_nfs_share_rejects_dataset_name(self, mock_client):
+        """A dataset name is the likely mistake, so it suggests the mountpoint."""
+        with pytest.raises(ValueError, match="/mnt/Store/Apps"):
+            await mock_client.create_nfs_share("Store/Apps")
+
+    @pytest.mark.asyncio
+    async def test_create_nfs_share_rejects_duplicate_path(self, mock_client):
+        """The same path cannot be exported twice; the error names the share."""
+        with pytest.raises(ValueError, match="already exported by NFS share id 1"):
+            await mock_client.create_nfs_share("/mnt/Store/Media")
+
+    @pytest.mark.asyncio
+    async def test_create_nfs_share_rejects_maproot_and_mapall(self, mock_client):
+        """maproot and mapall are two answers to the same question."""
+        with pytest.raises(ValueError, match="cannot both be set"):
+            await mock_client.create_nfs_share(
+                "/mnt/Store/Apps",
+                maproot_user="root",
+                mapall_user="apps",
+            )
+
+    @pytest.mark.asyncio
+    async def test_create_nfs_share_flags_unrestricted(self, mock_client):
+        """No hosts and no networks means everyone, and that is reported."""
+        result = await mock_client.create_nfs_share("/mnt/Store/Apps")
+        assert result["unrestricted"] is True
+
+    @pytest.mark.asyncio
+    async def test_create_nfs_share_trailing_slash_normalised(self, mock_client):
+        """A trailing slash must not create a second export of the same path."""
+        with pytest.raises(ValueError, match="already exported"):
+            await mock_client.create_nfs_share("/mnt/Store/Media/")
+
+    @pytest.mark.asyncio
+    async def test_update_nfs_share_by_id(self, mock_client):
+        """Test updating a share found by id."""
+        result = await mock_client.update_nfs_share(share_id=1, ro=True)
+        assert result["share"]["ro"] is True
+        assert result["requested"] == ["ro"]
+
+    @pytest.mark.asyncio
+    async def test_update_nfs_share_by_path(self, mock_client):
+        """Test updating a share found by the path it exports."""
+        result = await mock_client.update_nfs_share(
+            path="/mnt/Store/Media",
+            comment="changed",
+        )
+        assert result["share"]["comment"] == "changed"
+
+    @pytest.mark.asyncio
+    async def test_update_nfs_share_needs_exactly_one_identifier(self, mock_client):
+        """Neither or both is ambiguous."""
+        with pytest.raises(ValueError, match="exactly one"):
+            await mock_client.update_nfs_share(ro=True)
+        with pytest.raises(ValueError, match="exactly one"):
+            await mock_client.update_nfs_share(
+                share_id=1, path="/mnt/Store/Media", ro=True
+            )
+
+    @pytest.mark.asyncio
+    async def test_update_nfs_share_no_changes(self, mock_client):
+        """An update with nothing to change is a mistake worth naming."""
+        with pytest.raises(ValueError, match="No changes given"):
+            await mock_client.update_nfs_share(share_id=1)
+
+    @pytest.mark.asyncio
+    async def test_update_nfs_share_reports_replaced_hosts(self, mock_client):
+        """hosts replaces rather than appends, so the revocation is visible."""
+        result = await mock_client.update_nfs_share(
+            share_id=1,
+            hosts=["192.168.10.130"],
+        )
+
+        replaced = result["replaced_lists"]["hosts"]
+        assert replaced["before"] == ["192.168.10.129"]
+        assert replaced["after"] == ["192.168.10.130"]
+
+    @pytest.mark.asyncio
+    async def test_update_nfs_share_unchanged_list_not_reported(self, mock_client):
+        """Passing the same hosts back is not a replacement."""
+        result = await mock_client.update_nfs_share(
+            share_id=1,
+            hosts=["192.168.10.129"],
+        )
+        assert result["replaced_lists"] == {}
+
+    @pytest.mark.asyncio
+    async def test_update_nfs_share_rejects_mapall_over_maproot(self, mock_client):
+        """The conflict is checked against the merged result, not the payload."""
+        with pytest.raises(ValueError, match="both maproot_.* and mapall_"):
+            await mock_client.update_nfs_share(share_id=1, mapall_user="apps")
+
+    @pytest.mark.asyncio
+    async def test_update_nfs_share_nonexistent_id(self, mock_client):
+        """Test updating a share that is not there."""
+        with pytest.raises(ValueError, match="No NFS share with id 99"):
+            await mock_client.update_nfs_share(share_id=99, ro=True)
+
+    @pytest.mark.asyncio
+    async def test_update_nfs_share_nonexistent_path(self, mock_client):
+        """Test updating by a path that is not exported."""
+        with pytest.raises(ValueError, match="No NFS share exports"):
+            await mock_client.update_nfs_share(path="/mnt/Store/Nope", ro=True)
+
+    @pytest.mark.asyncio
+    async def test_delete_nfs_share(self, mock_client):
+        """Test removing an export."""
+        result = await mock_client.delete_nfs_share(share_id=1)
+
+        assert result["path"] == "/mnt/Store/Media"
+        assert result["hosts"] == ["192.168.10.129"]
+        assert await mock_client.list_nfs_shares() == []
+
+    @pytest.mark.asyncio
+    async def test_delete_nfs_share_by_path(self, mock_client):
+        """Test removing an export found by path."""
+        result = await mock_client.delete_nfs_share(path="/mnt/Store/Media")
+        assert result["id"] == 1
+        assert await mock_client.list_nfs_shares() == []
+
+    @pytest.mark.asyncio
+    async def test_delete_nfs_share_nonexistent(self, mock_client):
+        """Test removing an export that is not there."""
+        with pytest.raises(ValueError, match="No NFS share with id 99"):
+            await mock_client.delete_nfs_share(share_id=99)
+
     # ── System / Pool / Network Tests ─────────────────────────────────
 
     @pytest.mark.asyncio
